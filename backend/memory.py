@@ -12,14 +12,17 @@ from backend.config import GEMINI_API_KEY, GITHUB_TOKEN
 from backend.extraction import ExtractionResult, extract_from_commits, extract_from_prs
 from backend.ingestion import GitHubIngestor
 from backend.schemas import (
+    ChatSession,
     CodeFile,
     Commit,
     Convention,
+    Correction,
     Decision,
     Deprecation,
     Engineer,
     Incident,
     PullRequest,
+    UserInstruction,
 )
 
 cognee.config.set_llm_provider("gemini")
@@ -320,6 +323,80 @@ async def ingest_repo_into_memory(
 
     print("Ingestion complete.")
     return counts
+
+
+async def remember_instruction(
+    content: str,
+    tool: str,
+    project_context: str = "",
+    scope: str = "session",
+) -> dict:
+    """
+    Create a ChatSession + UserInstruction, push both to Cognee.
+    Returns {"session_id": ..., "instruction_id": ..., "status": "ok"}.
+    Uses datetime.now(UTC) for timestamps. Session_id format: f"{tool}-{iso_timestamp}".
+
+    Known simplification: every call creates its own fresh ChatSession rather than
+    reusing one across multiple remember_instruction/capture_correction calls in the
+    same real conversation — grouping calls into a shared session would need a session
+    id threaded in from the MCP client, which is out of scope here.
+    """
+    await _ensure_cognee_setup()
+
+    now = datetime.now(timezone.utc)
+    session_id = f"{tool}-{now.isoformat()}"
+
+    session = ChatSession(
+        session_id=session_id,
+        tool=tool,
+        started_at=now,
+        project_context=project_context,
+    )
+    instruction = UserInstruction(
+        content=content,
+        given_at=now,
+        scope=scope,
+        source_session=session,
+    )
+
+    await add_data_points([session, instruction])
+
+    return {"session_id": session_id, "instruction_id": str(instruction.id), "status": "ok"}
+
+
+async def capture_correction(
+    ai_suggested: str,
+    user_said: str,
+    reason: str,
+    tool: str,
+    project_context: str = "",
+) -> dict:
+    """
+    Create a ChatSession + Correction, push both to Cognee.
+    Returns {"session_id": ..., "correction_id": ..., "status": "ok"}.
+    """
+    await _ensure_cognee_setup()
+
+    now = datetime.now(timezone.utc)
+    session_id = f"{tool}-{now.isoformat()}"
+
+    session = ChatSession(
+        session_id=session_id,
+        tool=tool,
+        started_at=now,
+        project_context=project_context,
+    )
+    correction = Correction(
+        ai_suggested=ai_suggested,
+        user_said=user_said,
+        reason=reason,
+        given_at=now,
+        source_session=session,
+    )
+
+    await add_data_points([session, correction])
+
+    return {"session_id": session_id, "correction_id": str(correction.id), "status": "ok"}
 
 
 def _summarize_node(node, full_attrs_by_id: dict) -> dict:

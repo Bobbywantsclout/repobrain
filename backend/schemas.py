@@ -108,6 +108,37 @@ class Convention(DataPoint):
     metadata: dict = {"index_fields": ["rule"], "identity_fields": ["rule"]}
 
 
+class ChatSession(DataPoint):
+    """A conversation session with an AI coding tool."""
+
+    session_id: str
+    tool: str
+    started_at: datetime
+    project_context: str = ""
+    metadata: dict = {"index_fields": ["project_context"], "identity_fields": ["session_id"]}
+
+
+class UserInstruction(DataPoint):
+    """An explicit user instruction to the AI about what to remember or prefer."""
+
+    content: str
+    given_at: datetime
+    scope: str
+    source_session: "ChatSession | None" = None
+    metadata: dict = {"index_fields": ["content"], "identity_fields": ["content", "given_at"]}
+
+
+class Correction(DataPoint):
+    """A moment where the user corrected the AI's suggestion."""
+
+    ai_suggested: str
+    user_said: str
+    reason: str = ""
+    given_at: datetime
+    source_session: "ChatSession | None" = None
+    metadata: dict = {"index_fields": ["user_said"], "identity_fields": ["user_said", "given_at"]}
+
+
 # Decision/Deprecation/Incident/Convention reference Commit and PullRequest via forward
 # (string) type annotations so the schema reads top-to-bottom without needing the four
 # semantic classes reordered above the two structural ones. Pydantic v2 requires an
@@ -116,3 +147,8 @@ Decision.model_rebuild()
 Deprecation.model_rebuild()
 Incident.model_rebuild()
 Convention.model_rebuild()
+
+# UserInstruction/Correction reference ChatSession the same way.
+ChatSession.model_rebuild()
+UserInstruction.model_rebuild()
+Correction.model_rebuild()

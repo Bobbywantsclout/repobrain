@@ -5,14 +5,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.schemas import (
+    ChatSession,
     CodeFile,
     Commit,
     Convention,
+    Correction,
     Decision,
     Deprecation,
     Engineer,
     Incident,
     PullRequest,
+    UserInstruction,
 )
 
 
@@ -96,6 +99,37 @@ def main():
     )
     print(convention)
     assert convention.source_pr is pull_request
+
+    chat_session = ChatSession(
+        session_id="claude_code-2026-07-02T21:00:00",
+        tool="claude_code",
+        started_at=datetime(2026, 7, 2, 21, 0),
+        project_context="repobrain",
+    )
+    print(chat_session)
+    assert chat_session.session_id == "claude_code-2026-07-02T21:00:00"
+    assert chat_session.tool == "claude_code"
+
+    user_instruction = UserInstruction(
+        content="Always use rich for CLI output, never plain print().",
+        given_at=datetime(2026, 7, 2, 21, 5),
+        scope="project",
+        source_session=chat_session,
+    )
+    print(user_instruction)
+    assert user_instruction.source_session is chat_session
+    assert user_instruction.scope == "project"
+
+    correction = Correction(
+        ai_suggested="Use cognee.add() + cognee.cognify() to push DataPoints.",
+        user_said="Use add_data_points() directly, add()/cognify() rejects custom DataPoints.",
+        reason="cognee.add() raised IngestionError: Data type not supported for our DataPoint.",
+        given_at=datetime(2026, 7, 2, 21, 10),
+        source_session=chat_session,
+    )
+    print(correction)
+    assert correction.source_session is chat_session
+    assert correction.ai_suggested.startswith("Use cognee.add()")
 
 
 if __name__ == "__main__":
