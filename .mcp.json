@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "repobrain-hello": {
+      "type": "stdio",
+      "command": "C:\\Users\\bobby\\Desktop\\repobrain\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\Users\\bobby\\Desktop\\repobrain\\mcp_server\\hello.py"]
+    }
+  }
+}
