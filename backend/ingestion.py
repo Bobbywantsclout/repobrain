@@ -144,9 +144,11 @@ class GitHubIngestor:
             raise
 
     @_handle_github_errors
-    def fetch_commits(self, limit: int = 50) -> list[dict]:
+    def fetch_commits(self, branch: str = None, limit: int = 50) -> list[dict]:
+        """Fetch commits from a specific branch. If branch is None, uses the repo's default branch."""
+        resolved_branch = branch or self.repo.default_branch
         commits = []
-        for commit in self.repo.get_commits():
+        for commit in self.repo.get_commits(sha=resolved_branch):
             if len(commits) >= limit:
                 break
             author_login = commit.author.login if commit.author else None
@@ -158,15 +160,23 @@ class GitHubIngestor:
                     "author_handle": author_handle,
                     "timestamp": commit.commit.author.date,
                     "files_touched": [f.filename for f in commit.files],
+                    "branch": resolved_branch,
                 }
             )
-        print(f"Fetched {len(commits)} commits")
+        print(f"Fetched {len(commits)} commits from branch '{resolved_branch}'")
         return commits
 
     @_handle_github_errors
-    def fetch_pull_requests(self, state: str = "all", limit: int = 20) -> list[dict]:
+    def fetch_pull_requests(
+        self, state: str = "all", limit: int = 20, base_branch: str = None
+    ) -> list[dict]:
+        """Fetch PRs targeting a specific base branch. If base_branch is None, returns all PRs."""
+        get_pulls_kwargs = {"state": state}
+        if base_branch:
+            get_pulls_kwargs["base"] = base_branch
+
         pull_requests = []
-        for pr in self.repo.get_pulls(state=state):
+        for pr in self.repo.get_pulls(**get_pulls_kwargs):
             if len(pull_requests) >= limit:
                 break
             author_handle = pr.user.login if pr.user else "unknown"
@@ -184,21 +194,52 @@ class GitHubIngestor:
                     "files_changed": [f.filename for f in pr.get_files()],
                     "reviewer_handles": reviewer_handles,
                     "merged": pr.merged,
+                    "branch": pr.base.ref,
                 }
             )
-        print(f"Fetched {len(pull_requests)} pull requests")
+        suffix = f" targeting '{base_branch}'" if base_branch else ""
+        print(f"Fetched {len(pull_requests)} pull requests{suffix}")
         return pull_requests
 
     @_handle_github_errors
-    def fetch_file_tree(self) -> list[dict]:
+    def fetch_file_tree(self, branch: str = None) -> list[dict]:
+        """Fetch the file tree from a specific branch. If branch is None, uses the repo's default branch."""
+        resolved_branch = branch or self.repo.default_branch
         files = []
-        contents = self.repo.get_contents("")
+        contents = self.repo.get_contents("", ref=resolved_branch)
         while contents:
             item = contents.pop(0)
             if item.type == "dir":
-                contents.extend(self.repo.get_contents(item.path))
+                contents.extend(self.repo.get_contents(item.path, ref=resolved_branch))
             else:
                 language = detect_language(item.path)
                 files.append({"path": item.path, "language": language})
-        print(f"Fetched {len(files)} files")
+        print(f"Fetched {len(files)} files from branch '{resolved_branch}'")
         return files
+
+    @_handle_github_errors
+    def list_branches(self, limit: int = 10) -> list[str]:
+        """
+        Return branch names, default branch first, then others by most recent activity.
+        Cap at `limit` to avoid making too many API calls in one ingestion.
+
+        Note: ranking by "most recent activity" requires an extra API call per branch
+        (to read its tip commit's date), so to keep the call count bounded we only
+        inspect the first `limit - 1` non-default branches GitHub returns (not
+        necessarily the globally most-recent ones if the repo has more branches than
+        `limit`) and sort recency within that slice.
+        """
+        default_branch = self.repo.default_branch
+        all_branches = list(self.repo.get_branches())
+        candidates = [b for b in all_branches if b.name != default_branch][: max(limit - 1, 0)]
+
+        n = len(candidates)
+        dated = []
+        for i, branch in enumerate(candidates):
+            print(f"Fetching branch {i + 1}/{n}: {branch.name}")
+            dated.append((branch.commit.commit.author.date, branch.name))
+        dated.sort(key=lambda pair: pair[0], reverse=True)
+
+        names = [default_branch] + [name for _, name in dated]
+        print(f"Found {len(all_branches)} branches total, using {len(names[:limit])}")
+        return names[:limit]

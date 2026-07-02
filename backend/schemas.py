@@ -31,7 +31,11 @@ class Commit(DataPoint):
     author_handle: str
     timestamp: datetime
     files_touched: list[str] = []
-    metadata: dict = {"index_fields": ["sha"], "identity_fields": ["sha"]}
+    # Included in identity_fields (not just sha) because a cherry-picked or rebased
+    # commit can share a sha across branches, or get a new sha for "the same" change —
+    # keying identity on (sha, branch) tracks each branch's copy as its own memory node.
+    branch: str = ""
+    metadata: dict = {"index_fields": ["message"], "identity_fields": ["sha", "branch"]}
 
 
 class PullRequest(DataPoint):
@@ -44,10 +48,12 @@ class PullRequest(DataPoint):
     files_changed: list[str] = []
     reviewer_handles: list[str] = []
     merged: bool = False
+    # The base branch this PR targets (not its head/source branch).
+    branch: str = ""
     # TODO(scale): identity_fields collides across repos — add repo_name field if we ever support multi-repo ingestion
     # index_fields must be string fields (Cognee embeds them as text) — "number" is an int
     # and breaks vector indexing, so we index "title" instead; identity stays on "number".
-    metadata: dict = {"index_fields": ["title"], "identity_fields": ["number"]}
+    metadata: dict = {"index_fields": ["title"], "identity_fields": ["number", "branch"]}
 
 
 class Decision(DataPoint):
