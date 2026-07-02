@@ -1,4 +1,5 @@
 import sys
+import time
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -15,13 +16,18 @@ from dotenv import load_dotenv
 # by absolute path instead, before anything that reads env vars gets imported.
 load_dotenv(_PROJECT_ROOT / ".env")
 
-from mcp.server.fastmcp import FastMCP
+# Eager, one-time import at module load — NOT lazy. A lazy import triggered from
+# inside a tool handler deadlocks on Windows: Cognee's async init running from
+# within FastMCP's already-running stdio event loop collides with a second init
+# path FastMCP's transport triggers, and the two hang on a shared resource forever.
+# Paying the ~10s Cognee init cost once here, before mcp.run() starts, avoids that
+# entirely and stays comfortably under Claude Code's 60s handshake timeout.
+_start = time.time()
+import backend.memory as _backend_memory
 
-try:
-    import backend.memory
-except RuntimeError as e:
-    print(f"RepoBrain MCP server failed to start: {e}", file=sys.stderr)
-    sys.exit(1)
+print(f"RepoBrain: Cognee loaded in {time.time() - _start:.1f}s", file=sys.stderr)
+
+from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("RepoBrain")
 
@@ -146,7 +152,7 @@ async def remember_instruction(
     Use this when the user says things like 'remember that we don't use X' or
     'always prefer Y'. Returns a confirmation message.
     """
-    result = await backend.memory.remember_instruction(content, tool, project_context, scope)
+    result = await _backend_memory.remember_instruction(content, tool, project_context, scope)
     return f"Remembered: {content} (session {result['session_id']})"
 
 
@@ -164,7 +170,7 @@ async def capture_correction(
     a different approach. Store both what you suggested and what they said instead.
     Returns a confirmation message.
     """
-    result = await backend.memory.capture_correction(
+    result = await _backend_memory.capture_correction(
         ai_suggested, user_said, reason, tool, project_context
     )
     return f"Correction captured (session {result['session_id']})"
@@ -177,7 +183,7 @@ async def recall(query: str, top_k: int = 5) -> str:
     Returns relevant Decisions, Deprecations, Incidents, Conventions, UserInstructions,
     and Corrections. Use this before making assumptions about the codebase or user preferences.
     """
-    results = await backend.memory.search_memory(query, top_k=top_k)
+    results = await _backend_memory.search_memory(query, top_k=top_k)
     return _format_recall_results(results)
 
 
