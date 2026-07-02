@@ -135,6 +135,7 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
           isDimmed: false,
           isHighlighted: false,
           isQueryMatch: false,
+          isLabelVisible: false,
         },
       };
     });
@@ -163,9 +164,11 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
     setNodes(initialNodes);
   }, [initialNodes, setNodes]);
 
-  // Update highlight/dim states based on hover AND the active query — a node is
-  // dimmed if EITHER the query is active and it doesn't match, OR hover is active
-  // and it isn't the hovered node or a neighbor of it.
+  // Update highlight/dim/label-visibility states based on hover AND the active
+  // query — a node is dimmed if EITHER the query is active and it doesn't match,
+  // OR hover is active and it isn't the hovered node or a neighbor of it. A
+  // node's label is visible only when hovered, a neighbor of the hovered node,
+  // or a query match — everything else stays a quiet, unlabeled dot.
   useEffect(() => {
     setNodes((prev) =>
       prev.map((node) => {
@@ -175,7 +178,13 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
         if (!hoveredId) {
           return {
             ...node,
-            data: { ...node.data, isHighlighted: false, isQueryMatch: isMatch, isDimmed: queryDimmed },
+            data: {
+              ...node.data,
+              isHighlighted: false,
+              isQueryMatch: isMatch,
+              isDimmed: queryDimmed,
+              isLabelVisible: isMatch,
+            },
           };
         }
         const isHovered = node.id === hoveredId;
@@ -188,6 +197,7 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
             isHighlighted: isHovered,
             isQueryMatch: isMatch,
             isDimmed: queryDimmed || hoverDimmed,
+            isLabelVisible: isHovered || isNeighbor,
           },
         };
       })
@@ -228,33 +238,36 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
   );
 
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      nodeTypes={nodeTypes}
-      onNodeMouseEnter={handleNodeMouseEnter}
-      onNodeMouseLeave={handleNodeMouseLeave}
-      onNodeClick={handleNodeClick}
-      fitView
-      fitViewOptions={{ padding: 0.2, duration: 800 }}
-      minZoom={0.2}
-      maxZoom={2}
-      defaultEdgeOptions={{ type: "straight" }}
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background
-        variant={BackgroundVariant.Dots}
-        gap={24}
-        size={1}
-        color="hsl(222, 47%, 15%)"
-      />
-      <Controls
-        position="bottom-right"
-        showInteractive={false}
-      />
-      <MeasurementFallback nodeIds={nodeIds} />
-    </ReactFlow>
+    <div style={{ width: "100%", height: "100vh" }}>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        nodeTypes={nodeTypes}
+        onNodeMouseEnter={handleNodeMouseEnter}
+        onNodeMouseLeave={handleNodeMouseLeave}
+        onNodeClick={handleNodeClick}
+        fitView
+        fitViewOptions={{ padding: 0.2, duration: 800 }}
+        minZoom={0.2}
+        maxZoom={2}
+        defaultEdgeOptions={{ type: "straight" }}
+        proOptions={{ hideAttribution: true }}
+        style={{ background: "transparent" }}
+      >
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={24}
+          size={1}
+          color="hsl(222, 47%, 15%)"
+        />
+        <Controls
+          position="bottom-right"
+          showInteractive={false}
+        />
+        <MeasurementFallback nodeIds={nodeIds} />
+      </ReactFlow>
+    </div>
   );
 }

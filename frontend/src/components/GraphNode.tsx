@@ -12,6 +12,7 @@ export interface GraphNodeData {
   isDimmed: boolean;
   isHighlighted: boolean;
   isQueryMatch: boolean;
+  isLabelVisible: boolean;
 }
 
 export default function GraphNode({ data }: NodeProps<GraphNodeData>) {
@@ -49,22 +50,26 @@ export default function GraphNode({ data }: NodeProps<GraphNodeData>) {
         }}
       />
 
-      {/* Label — positioned below the node, small, secondary color */}
-      <div
-        className="absolute pointer-events-none whitespace-nowrap text-center"
-        style={{
-          top: size + 4,
-          left: "50%",
-          transform: "translateX(-50%)",
-          fontSize: "11px",
-          color: "var(--text-secondary)",
-          maxWidth: "180px",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
-      >
-        {data.label}
-      </div>
+      {/* Label — hidden by default, revealed only on hover/neighbor/query match */}
+      {data.isLabelVisible && (
+        <div
+          className="absolute pointer-events-none whitespace-nowrap text-center transition-opacity"
+          style={{
+            top: size + 4,
+            left: "50%",
+            transform: "translateX(-50%)",
+            fontSize: "11px",
+            color: "var(--text-secondary)",
+            maxWidth: "180px",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            transitionDuration: "150ms",
+            opacity: 1,
+          }}
+        >
+          {data.label}
+        </div>
+      )}
     </div>
   );
 }

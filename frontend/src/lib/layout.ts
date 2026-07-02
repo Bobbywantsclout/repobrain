@@ -1,3 +1,4 @@
+import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceX, forceY } from "d3-force";
 import type { GraphNode as ApiNode, GraphEdge as ApiEdge } from "./api";
 
 export interface LayoutedNode {
@@ -6,12 +7,33 @@ export interface LayoutedNode {
   y: number;
 }
 
+interface SimNode {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  fx?: number | null;
+  fy?: number | null;
+  isConnected: boolean;
+}
+
+interface SimLink {
+  source: string;
+  target: string;
+}
+
 /**
- * Layout algorithm — "gravitational cluster":
- * 1. Connected nodes form a dense center cluster (spiral pack, ~200px radius)
- * 2. Isolated nodes group tightly at the top and bottom edges
- *    (not a symmetric ring — clusters feel less "algorithmic")
- * 3. Positions are deterministic per node id, so the graph doesn't scramble on refresh
+ * Compute a force-directed layout using d3-force.
+ * - Connected nodes attract each other via edge springs
+ * - All nodes repel each other via many-body force
+ * - Collision force prevents overlaps
+ * - Weak center gravity keeps things from drifting off-screen
+ * - Isolated nodes are gently pulled toward the outer edges
+ *   (via forceX/forceY biased outward) so they don't overwhelm the center
+ *
+ * Simulation runs for a fixed number of ticks (headless), then we take the
+ * final positions. This produces a "settled" graph — no live jitter, no
+ * ongoing motion after mount.
  */
 export function computeLayout(nodes: ApiNode[], edges: ApiEdge[]): LayoutedNode[] {
   const connectedIds = new Set<string>();
@@ -20,68 +42,73 @@ export function computeLayout(nodes: ApiNode[], edges: ApiEdge[]): LayoutedNode[
     connectedIds.add(edge.target);
   }
 
-  const connected = nodes.filter((n) => connectedIds.has(n.id));
-  const isolated = nodes.filter((n) => !connectedIds.has(n.id));
-
-  const layouted: LayoutedNode[] = [];
-
-  // Connected: spiral pack in the center
-  const CENTER_RADIUS = 180;
-  connected.forEach((node, i) => {
-    const angle = i * 2.4; // golden-ratio-ish spiral, feels organic
-    const dist = Math.sqrt(i / Math.max(connected.length, 1)) * CENTER_RADIUS;
-    const jitter = deterministicJitter(node.id, 15);
-    layouted.push({
-      id: node.id,
-      x: Math.cos(angle) * dist + jitter.x,
-      y: Math.sin(angle) * dist + jitter.y,
-    });
+  // Initialize with deterministic starting positions so the simulation
+  // converges consistently across runs
+  const simNodes: SimNode[] = nodes.map((n, i) => {
+    const isConnected = connectedIds.has(n.id);
+    const seed = deterministicSeed(n.id);
+    return {
+      id: n.id,
+      type: n.type,
+      // Connected nodes start near center; isolated nodes start on the periphery
+      x: isConnected
+        ? (seed.x - 0.5) * 100
+        : Math.cos(seed.x * Math.PI * 2) * 400,
+      y: isConnected
+        ? (seed.y - 0.5) * 100
+        : Math.sin(seed.y * Math.PI * 2) * 400,
+      isConnected,
+    };
   });
 
-  // Isolated: split into two tight satellite groups (top + bottom)
-  // This avoids the "symmetric ring" look and packs them closer to the center
-  const half = Math.ceil(isolated.length / 2);
-  const topGroup = isolated.slice(0, half);
-  const bottomGroup = isolated.slice(half);
+  const simLinks: SimLink[] = edges.map((e) => ({
+    source: e.source,
+    target: e.target,
+  }));
 
-  // Top cluster centered at (0, -380), rectangular grid pack
-  packRectGrid(topGroup, layouted, 0, -380, 90);
+  // Build the simulation
+  const simulation = forceSimulation(simNodes as any)
+    .force(
+      "link",
+      forceLink(simLinks as any)
+        .id((d: any) => d.id)
+        .distance(140)
+        .strength(0.7)
+    )
+    .force("charge", forceManyBody().strength(-320))
+    .force("center", forceCenter(0, 0).strength(0.05))
+    .force("collide", forceCollide().radius(38).strength(0.9))
+    // Push isolated nodes toward the periphery
+    .force(
+      "x-isolated",
+      forceX((d: any) => (d.isConnected ? 0 : d.x > 0 ? 480 : -480)).strength(
+        (d: any) => (d.isConnected ? 0 : 0.08)
+      )
+    )
+    .force(
+      "y-isolated",
+      forceY((d: any) => (d.isConnected ? 0 : d.y > 0 ? 300 : -300)).strength(
+        (d: any) => (d.isConnected ? 0 : 0.08)
+      )
+    )
+    .stop();
 
-  // Bottom cluster centered at (0, 380), rectangular grid pack
-  packRectGrid(bottomGroup, layouted, 0, 380, 90);
+  // Run headless simulation — enough ticks to settle
+  const TICKS = 400;
+  for (let i = 0; i < TICKS; i++) {
+    simulation.tick();
+  }
 
-  return layouted;
+  return simNodes.map((n) => ({ id: n.id, x: n.x, y: n.y }));
 }
 
-function packRectGrid(
-  group: ApiNode[],
-  out: LayoutedNode[],
-  centerX: number,
-  centerY: number,
-  spacing: number
-) {
-  const cols = Math.ceil(Math.sqrt(group.length));
-  const rows = Math.ceil(group.length / cols);
-  const width = (cols - 1) * spacing;
-  const height = (rows - 1) * spacing;
-  group.forEach((node, i) => {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const jitter = deterministicJitter(node.id, 12);
-    out.push({
-      id: node.id,
-      x: centerX - width / 2 + col * spacing + jitter.x,
-      y: centerY - height / 2 + row * spacing + jitter.y,
-    });
-  });
-}
-
-function deterministicJitter(id: string, magnitude: number): { x: number; y: number } {
+// Deterministic seed based on node id — same node always converges to a similar position
+function deterministicSeed(id: string): { x: number; y: number } {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
     hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
   }
-  const x = ((hash & 0xffff) / 0xffff - 0.5) * magnitude * 2;
-  const y = (((hash >> 16) & 0xffff) / 0xffff - 0.5) * magnitude * 2;
+  const x = ((hash & 0xffff) / 0xffff);
+  const y = (((hash >> 16) & 0xffff) / 0xffff);
   return { x, y };
 }
