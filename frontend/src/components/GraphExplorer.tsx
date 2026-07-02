@@ -15,8 +15,8 @@ import ReactFlow, {
 } from "reactflow";
 import GraphNode, { GraphNodeData } from "./GraphNode";
 import { computeLayout } from "@/lib/layout";
-import { LARGE_NODE_EDGE_THRESHOLD, NODE_SIZE_BASE, NODE_SIZE_LARGE } from "@/lib/design";
-import type { GraphResponse } from "@/lib/api";
+import { LARGE_NODE_EDGE_THRESHOLD, NODE_SIZE_BASE, NODE_SIZE_LARGE, DIMMED_OPACITY } from "@/lib/design";
+import type { GraphResponse, GraphNode as ApiNode } from "@/lib/api";
 
 const nodeTypes = {
   graphNode: GraphNode,
@@ -24,6 +24,8 @@ const nodeTypes = {
 
 interface Props {
   data: GraphResponse;
+  query: string;
+  onNodeClick: (node: ApiNode) => void;
 }
 
 // React Flow's automatic node measurement relies on ResizeObserver firing at least
@@ -45,7 +47,7 @@ function MeasurementFallback({ nodeIds }: { nodeIds: string[] }) {
   return null;
 }
 
-export default function GraphExplorer({ data }: Props) {
+export default function GraphExplorer({ data, query, onNodeClick }: Props) {
   // Count edges per node id to determine "large" nodes
   const edgeCountById = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -82,6 +84,33 @@ export default function GraphExplorer({ data }: Props) {
   // MeasurementFallback effect only reruns when the actual node set changes.
   const nodeIds = useMemo(() => data.nodes.map((n) => n.id), [data.nodes]);
 
+  // Full API node lookup, for click-to-inspect (needs the raw attributes, not
+  // the trimmed React Flow node data).
+  const nodesById = useMemo(() => {
+    const map: Record<string, ApiNode> = {};
+    for (const n of data.nodes) map[n.id] = n;
+    return map;
+  }, [data.nodes]);
+
+  // Set of node ids matching the current query — case-insensitive substring on
+  // label, type, or branch. null means "no query active" (no filtering at all),
+  // distinct from an empty Set (query active but nothing matched).
+  const matchingIds = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return null;
+    const matches = new Set<string>();
+    for (const n of data.nodes) {
+      if (
+        n.label.toLowerCase().includes(q) ||
+        n.type.toLowerCase().includes(q) ||
+        n.branch.toLowerCase().includes(q)
+      ) {
+        matches.add(n.id);
+      }
+    }
+    return matches;
+  }, [query, data.nodes]);
+
   // Build initial React Flow nodes
   const initialNodes: RFNode<GraphNodeData>[] = useMemo(() => {
     return data.nodes.map((n) => {
@@ -105,6 +134,7 @@ export default function GraphExplorer({ data }: Props) {
           isLarge,
           isDimmed: false,
           isHighlighted: false,
+          isQueryMatch: false,
         },
       };
     });
@@ -126,33 +156,60 @@ export default function GraphExplorer({ data }: Props) {
   }, [data.edges]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initialEdges);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
   // Reset nodes when data changes
   useEffect(() => {
     setNodes(initialNodes);
   }, [initialNodes, setNodes]);
 
-  // Update highlight/dim states based on hover
+  // Update highlight/dim states based on hover AND the active query — a node is
+  // dimmed if EITHER the query is active and it doesn't match, OR hover is active
+  // and it isn't the hovered node or a neighbor of it.
   useEffect(() => {
     setNodes((prev) =>
       prev.map((node) => {
+        const isMatch = matchingIds !== null && matchingIds.has(node.id);
+        const queryDimmed = matchingIds !== null && !isMatch;
+
         if (!hoveredId) {
-          return { ...node, data: { ...node.data, isHighlighted: false, isDimmed: false } };
+          return {
+            ...node,
+            data: { ...node.data, isHighlighted: false, isQueryMatch: isMatch, isDimmed: queryDimmed },
+          };
         }
         const isHovered = node.id === hoveredId;
         const isNeighbor = neighborsById[hoveredId]?.has(node.id) ?? false;
+        const hoverDimmed = !isHovered && !isNeighbor;
         return {
           ...node,
           data: {
             ...node.data,
             isHighlighted: isHovered,
-            isDimmed: !isHovered && !isNeighbor,
+            isQueryMatch: isMatch,
+            isDimmed: queryDimmed || hoverDimmed,
           },
         };
       })
     );
-  }, [hoveredId, neighborsById, setNodes]);
+  }, [hoveredId, neighborsById, matchingIds, setNodes]);
+
+  // Update edge styling based on the active query — edges between two matching
+  // nodes get subtly brighter, edges touching a non-matching node dim to 15%.
+  useEffect(() => {
+    setEdges((prev) =>
+      prev.map((edge) => {
+        if (matchingIds === null) {
+          return { ...edge, style: { ...edge.style, opacity: 0.5 } };
+        }
+        const bothMatch = matchingIds.has(edge.source) && matchingIds.has(edge.target);
+        return {
+          ...edge,
+          style: { ...edge.style, opacity: bothMatch ? 0.9 : DIMMED_OPACITY },
+        };
+      })
+    );
+  }, [matchingIds, setEdges]);
 
   const handleNodeMouseEnter: NodeMouseHandler = useCallback((_, node) => {
     setHoveredId(node.id);
@@ -161,6 +218,14 @@ export default function GraphExplorer({ data }: Props) {
   const handleNodeMouseLeave: NodeMouseHandler = useCallback(() => {
     setHoveredId(null);
   }, []);
+
+  const handleNodeClick: NodeMouseHandler = useCallback(
+    (_, node) => {
+      const apiNode = nodesById[node.id];
+      if (apiNode) onNodeClick(apiNode);
+    },
+    [nodesById, onNodeClick]
+  );
 
   return (
     <ReactFlow
@@ -171,6 +236,7 @@ export default function GraphExplorer({ data }: Props) {
       nodeTypes={nodeTypes}
       onNodeMouseEnter={handleNodeMouseEnter}
       onNodeMouseLeave={handleNodeMouseLeave}
+      onNodeClick={handleNodeClick}
       fitView
       fitViewOptions={{ padding: 0.2, duration: 800 }}
       minZoom={0.2}

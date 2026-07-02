@@ -7,19 +7,13 @@ export interface LayoutedNode {
 }
 
 /**
- * Layout algorithm:
- * 1. Nodes with edges cluster near the center.
- * 2. Isolated nodes (no edges) form a sparse outer ring.
- * 3. Positions are deterministic (seeded by node id) so refreshes don't scramble.
- *
- * This gives a "graph has settled" feel without a live simulation.
+ * Layout algorithm — "gravitational cluster":
+ * 1. Connected nodes form a dense center cluster (spiral pack, ~200px radius)
+ * 2. Isolated nodes group tightly at the top and bottom edges
+ *    (not a symmetric ring — clusters feel less "algorithmic")
+ * 3. Positions are deterministic per node id, so the graph doesn't scramble on refresh
  */
 export function computeLayout(nodes: ApiNode[], edges: ApiEdge[]): LayoutedNode[] {
-  const CENTER_X = 0;
-  const CENTER_Y = 0;
-  const CONNECTED_RADIUS = 250;
-  const ISOLATED_RADIUS = 500;
-
   const connectedIds = new Set<string>();
   for (const edge of edges) {
     connectedIds.add(edge.source);
@@ -31,32 +25,57 @@ export function computeLayout(nodes: ApiNode[], edges: ApiEdge[]): LayoutedNode[
 
   const layouted: LayoutedNode[] = [];
 
-  // Connected nodes — arrange in inner circle with slight jitter
+  // Connected: spiral pack in the center
+  const CENTER_RADIUS = 180;
   connected.forEach((node, i) => {
-    const angle = (i / Math.max(connected.length, 1)) * 2 * Math.PI;
-    const jitter = deterministicJitter(node.id, 40);
+    const angle = i * 2.4; // golden-ratio-ish spiral, feels organic
+    const dist = Math.sqrt(i / Math.max(connected.length, 1)) * CENTER_RADIUS;
+    const jitter = deterministicJitter(node.id, 15);
     layouted.push({
       id: node.id,
-      x: CENTER_X + Math.cos(angle) * (CONNECTED_RADIUS + jitter.x),
-      y: CENTER_Y + Math.sin(angle) * (CONNECTED_RADIUS + jitter.y),
+      x: Math.cos(angle) * dist + jitter.x,
+      y: Math.sin(angle) * dist + jitter.y,
     });
   });
 
-  // Isolated nodes — arrange in outer circle, sparser, with more jitter
-  isolated.forEach((node, i) => {
-    const angle = (i / Math.max(isolated.length, 1)) * 2 * Math.PI;
-    const jitter = deterministicJitter(node.id, 80);
-    layouted.push({
-      id: node.id,
-      x: CENTER_X + Math.cos(angle) * (ISOLATED_RADIUS + jitter.x),
-      y: CENTER_Y + Math.sin(angle) * (ISOLATED_RADIUS + jitter.y),
-    });
-  });
+  // Isolated: split into two tight satellite groups (top + bottom)
+  // This avoids the "symmetric ring" look and packs them closer to the center
+  const half = Math.ceil(isolated.length / 2);
+  const topGroup = isolated.slice(0, half);
+  const bottomGroup = isolated.slice(half);
+
+  // Top cluster centered at (0, -380), rectangular grid pack
+  packRectGrid(topGroup, layouted, 0, -380, 90);
+
+  // Bottom cluster centered at (0, 380), rectangular grid pack
+  packRectGrid(bottomGroup, layouted, 0, 380, 90);
 
   return layouted;
 }
 
-// Cheap deterministic hash-based jitter — same node id always gets same position
+function packRectGrid(
+  group: ApiNode[],
+  out: LayoutedNode[],
+  centerX: number,
+  centerY: number,
+  spacing: number
+) {
+  const cols = Math.ceil(Math.sqrt(group.length));
+  const rows = Math.ceil(group.length / cols);
+  const width = (cols - 1) * spacing;
+  const height = (rows - 1) * spacing;
+  group.forEach((node, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const jitter = deterministicJitter(node.id, 12);
+    out.push({
+      id: node.id,
+      x: centerX - width / 2 + col * spacing + jitter.x,
+      y: centerY - height / 2 + row * spacing + jitter.y,
+    });
+  });
+}
+
 function deterministicJitter(id: string, magnitude: number): { x: number; y: number } {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {

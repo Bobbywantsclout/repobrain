@@ -1,14 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchGraph, GraphResponse } from "@/lib/api";
+import { fetchGraph, GraphResponse, GraphNode } from "@/lib/api";
 import GraphExplorer from "@/components/GraphExplorer";
 import TopBar from "@/components/TopBar";
+import QueryBar from "@/components/QueryBar";
+import DetailPanel from "@/components/DetailPanel";
+import OnboardingHint from "@/components/OnboardingHint";
 import "reactflow/dist/style.css";
 
 export default function Home() {
   const [data, setData] = useState<GraphResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
 
   useEffect(() => {
     fetchGraph()
@@ -46,7 +51,21 @@ export default function Home() {
         </div>
       )}
 
-      {data && <GraphExplorer data={data} />}
+      {data && (
+        <>
+          <GraphExplorer
+            data={data}
+            query={query}
+            onNodeClick={setSelectedNode}
+          />
+          <QueryBar value={query} onChange={setQuery} />
+          <OnboardingHint />
+          <DetailPanel
+            node={selectedNode}
+            onClose={() => setSelectedNode(null)}
+          />
+        </>
+      )}
     </div>
   );
 }

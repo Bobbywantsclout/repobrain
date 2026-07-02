@@ -1,7 +1,7 @@
 "use client";
 
 import { Handle, Position, NodeProps } from "reactflow";
-import { NODE_COLORS, NODE_SIZE_BASE, NODE_SIZE_LARGE, hasBranchContext } from "@/lib/design";
+import { NODE_COLORS, NODE_SIZE_BASE, NODE_SIZE_LARGE, DIMMED_OPACITY, hasBranchContext } from "@/lib/design";
 import type { NodeType } from "@/lib/api";
 
 export interface GraphNodeData {
@@ -11,6 +11,7 @@ export interface GraphNodeData {
   isLarge: boolean;
   isDimmed: boolean;
   isHighlighted: boolean;
+  isQueryMatch: boolean;
 }
 
 export default function GraphNode({ data }: NodeProps<GraphNodeData>) {
@@ -22,7 +23,7 @@ export default function GraphNode({ data }: NodeProps<GraphNodeData>) {
     <div
       className="relative transition-opacity flex items-center justify-center"
       style={{
-        opacity: data.isDimmed ? 0.2 : 1,
+        opacity: data.isDimmed ? DIMMED_OPACITY : 1,
         transitionDuration: "150ms",
       }}
     >
@@ -40,6 +41,8 @@ export default function GraphNode({ data }: NodeProps<GraphNodeData>) {
           border: showBranch ? "2px solid rgba(255, 255, 255, 0.7)" : "none",
           boxShadow: data.isHighlighted
             ? `0 0 20px ${color}, 0 0 40px ${color}`
+            : data.isQueryMatch
+            ? `0 0 10px ${color}`
             : "0 2px 8px rgba(0, 0, 0, 0.4)",
           transform: data.isHighlighted ? "scale(1.15)" : "scale(1)",
           transitionDuration: "150ms",

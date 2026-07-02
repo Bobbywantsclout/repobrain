@@ -28,7 +28,7 @@ export function hasBranchContext(branch: string): boolean {
 }
 
 // Muted opacity used when a node is filtered out or unrelated to hover target
-export const DIMMED_OPACITY = 0.2;
+export const DIMMED_OPACITY = 0.15;
 
 // Motion durations (ms)
 export const MOTION = {
