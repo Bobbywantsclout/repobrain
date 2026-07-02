@@ -455,7 +455,7 @@ def _summarize_node(node, full_attrs_by_id: dict) -> dict:
     return attrs
 
 
-async def search_memory(query: str, top_k: int = 5) -> list[dict]:
+async def search_memory(query: str, top_k: int = 5, branch: str | None = None) -> list[dict]:
     """Thin wrapper over Cognee's retrieval layer for consistency with the rest of the codebase.
 
     NOTE: cognee.search() is scoped to datasets registered via the cognee.add()/cognify()
@@ -464,6 +464,13 @@ async def search_memory(query: str, top_k: int = 5) -> list[dict]:
     that data — confirmed via the sanity check (it reported "empty knowledge graph" even
     with a node present). GraphCompletionRetriever queries the graph/vector stores directly
     and reliably finds it instead.
+
+    If branch is given, results are filtered to triplets where either side has that branch
+    (Commit/PullRequest carry "branch" directly; Decision/Deprecation/Incident/Convention
+    don't have a branch field themselves, but every triplet already pairs them with their
+    linked Commit/PullRequest on the *other* side of the same triplet dict via the
+    source_commit/source_pr edge — so checking both source and target covers the "semantic
+    node whose linked commit/PR is on this branch" case too, with no separate lookup needed).
     """
     retriever = GraphCompletionRetriever(top_k=top_k)
     triplets = await retriever.get_triplets(query)
@@ -483,8 +490,37 @@ async def search_memory(query: str, top_k: int = 5) -> list[dict]:
             }
         )
 
+    if branch is not None:
+
+        def matches_branch(triplet: dict) -> bool:
+            source = triplet.get("source", {})
+            target = triplet.get("target", {})
+            return source.get("branch") == branch or target.get("branch") == branch
+
+        results = [r for r in results if matches_branch(r)]
+
     if not results:
         completions = await retriever.get_completion(query)
         results = [{"answer": c} for c in completions]
 
     return results
+
+
+async def get_divergent_branches(query: str, target_branch: str, top_k: int = 5) -> list[str]:
+    """
+    Given a query and a target branch, return a list of OTHER branches (excluding target_branch)
+    that have semantically relevant nodes for this query.
+    Used to hint at branch divergence in CLI output.
+    Returns an empty list if there's no divergence.
+    """
+    results = await search_memory(query, top_k=top_k)
+
+    branches: set[str] = set()
+    for r in results:
+        for key in ("source", "target"):
+            node = r.get(key)
+            if node and node.get("branch"):
+                branches.add(node["branch"])
+
+    branches.discard(target_branch)
+    return sorted(branches)

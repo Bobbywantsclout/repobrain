@@ -9,7 +9,7 @@ console = Console()
 
 try:
     from backend.config import parse_github_repo
-    from backend.memory import ingest_repo_into_memory, search_memory
+    from backend.memory import get_divergent_branches, ingest_repo_into_memory, search_memory
 except RuntimeError as e:
     console.print(f"[red]Configuration error:[/red] {e}")
     sys.exit(1)
@@ -86,6 +86,17 @@ def _format_source(node: dict) -> str:
     return ""
 
 
+def _format_branch(node: dict) -> str:
+    # Direct: Commit/PullRequest carry their own "branch" field.
+    branch = node.get("branch")
+    if not branch:
+        # Indirect: semantic nodes (Decision/Deprecation/Incident/Convention) don't have
+        # a branch field themselves — read it off the linked Commit/PullRequest instead.
+        linked = node.get("_linked_node") or {}
+        branch = linked.get("branch")
+    return branch or "unknown branch"
+
+
 def _format_content(node: dict) -> str:
     node_type = node.get("type")
     if node_type == "Incident":
@@ -108,11 +119,15 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
+    branches = [b.strip() for b in args.branches.split(",")] if args.branches else None
+
     console.rule(f"[bold cyan]RepoBrain — Ingesting {repo}[/bold cyan]")
 
     try:
         counts = asyncio.run(
-            ingest_repo_into_memory(repo, commit_limit=args.commits, pr_limit=args.prs)
+            ingest_repo_into_memory(
+                repo, branches=branches, commit_limit=args.commits, pr_limit=args.prs
+            )
         )
     except RuntimeError as e:
         console.print(f"[red]Configuration error:[/red] {e}")
@@ -129,7 +144,11 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     table.add_column(justify="left")
     table.add_column(justify="right")
     table.add_row("  Commits ingested:", str(counts["commits"]))
+    for branch_name, n in counts.get("commits_per_branch", {}).items():
+        table.add_row(f"    - {branch_name}:", str(n))
     table.add_row("  Pull requests ingested:", str(counts["prs"]))
+    for branch_name, n in counts.get("prs_per_branch", {}).items():
+        table.add_row(f"    - {branch_name}:", str(n))
     table.add_row("  Files indexed:", str(counts["files"]))
     table.add_row("  Decisions extracted:", str(counts["decisions"]))
     table.add_row("  Deprecations extracted:", str(counts["deprecations"]))
@@ -143,7 +162,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
 def cmd_ask(args: argparse.Namespace) -> None:
     try:
-        results = asyncio.run(search_memory(args.question, top_k=args.top_k))
+        results = asyncio.run(search_memory(args.question, top_k=args.top_k, branch=args.branch))
     except Exception as e:
         console.print(f"[red]Search failed:[/red] {type(e).__name__}: {e}")
         sys.exit(1)
@@ -163,16 +182,31 @@ def cmd_ask(args: argparse.Namespace) -> None:
                 "[yellow]No memory nodes found for this question yet.[/yellow] "
                 "Try ingesting a repo first with `repobrain ingest <repo>`."
             )
-        return
+    else:
+        for i, node in enumerate(nodes[: args.top_k], start=1):
+            branch_tag = _format_branch(node)
+            source_tag = _format_source(node).strip("()")
+            header = (
+                f"[bold cyan][{i}][/bold cyan] [bold]{node['type']}[/bold]"
+                f"  |  branch: {branch_tag}"
+            )
+            if source_tag:
+                header += f"  |  {source_tag}"
+            console.print(header)
+            console.print(f'    "{_format_content(node)}"')
+            console.print()
 
-    for i, node in enumerate(nodes[: args.top_k], start=1):
-        source_tag = _format_source(node)
-        header = f"[bold cyan][{i}][/bold cyan] [bold]{node['type']}[/bold]"
-        if source_tag:
-            header += f" {source_tag}"
-        console.print(header)
-        console.print(f'    "{_format_content(node)}"')
-        console.print()
+    if args.branch is not None:
+        divergent = asyncio.run(get_divergent_branches(args.question, args.branch, top_k=args.top_k))
+        if divergent:
+            console.print()
+            console.print(
+                f"[dim]Note: {len(divergent)} other branch(es) have divergent decisions "
+                f"on this topic: {', '.join(divergent)}[/dim]"
+            )
+            console.print(
+                '[dim]Query those branches with: repobrain ask "..." --branch <name>[/dim]'
+            )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -189,6 +223,15 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.add_argument(
         "--prs", type=int, default=10, help="Max pull requests to ingest (default: 10)"
     )
+    ingest_parser.add_argument(
+        "--branches",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated branch names to ingest (e.g. --branches main,develop). "
+            "Default: repo's default branch only."
+        ),
+    )
 
     ask_parser = subparsers.add_parser("ask", help="Ask a question against ingested memory")
     ask_parser.add_argument("question", help="Natural-language question")
@@ -198,6 +241,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=5,
         dest="top_k",
         help="Number of results to show (default: 5)",
+    )
+    ask_parser.add_argument(
+        "--branch",
+        type=str,
+        default=None,
+        help="Restrict results to a specific branch (e.g. --branch main)",
     )
 
     return parser
