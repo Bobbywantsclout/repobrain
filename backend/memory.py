@@ -182,16 +182,19 @@ def pr_to_datapoints(pr: dict, result: ExtractionResult, source_pr: PullRequest)
 
 def repo_to_datapoints(
     commits: list[dict], prs: list[dict], file_tree: list[dict], repo_full_name: str
-) -> tuple[list[DataPoint], dict[str, Commit], dict[int, PullRequest]]:
+) -> tuple[list[DataPoint], dict[tuple[str, str], Commit], dict[tuple[int, str], PullRequest]]:
     """
     Turn raw ingestion output (list of commit dicts, list of PR dicts, list of file dicts)
     into structural Cognee DataPoints: CodeFile, Engineer, Commit, PullRequest.
 
-    Returns (datapoints, commit_by_sha, pr_by_number) — the two lookup dicts hand back the
-    exact Commit/PullRequest instances just constructed, so callers (see
-    ingest_repo_into_memory) can pass the *same* instance into commit_to_datapoints/
-    pr_to_datapoints as source_commit/source_pr, making the resulting graph edge point at
-    the node actually pushed rather than an equivalent-but-distinct duplicate.
+    Returns (datapoints, commit_by_key, pr_by_key) — keyed by (sha, branch) and
+    (number, branch) tuples, not sha/number alone. Multi-branch ingestion can fetch the
+    same sha or PR number under more than one branch (e.g. shared history between a
+    feature branch and main, within the fetch window); keying on the pair keeps each
+    branch's copy addressable as its own instance instead of one silently overwriting
+    the other in the lookup dict. Callers (see ingest_repo_into_memory) pass the *same*
+    instance into commit_to_datapoints/pr_to_datapoints as source_commit/source_pr, so
+    the resulting graph edge points at the node actually pushed rather than a duplicate.
 
     Engineers are deduplicated by github_handle before returning — Cognee's identity_fields
     already makes re-adding the same Engineer idempotent on its side, but there's no reason
@@ -203,8 +206,8 @@ def repo_to_datapoints(
     """
     datapoints: list[DataPoint] = []
     engineers_by_handle: dict[str, Engineer] = {}
-    commit_by_sha: dict[str, Commit] = {}
-    pr_by_number: dict[int, PullRequest] = {}
+    commit_by_key: dict[tuple[str, str], Commit] = {}
+    pr_by_key: dict[tuple[int, str], PullRequest] = {}
 
     def _touch_engineer(handle: str) -> None:
         if handle and handle not in engineers_by_handle:
@@ -221,6 +224,7 @@ def repo_to_datapoints(
 
     for commit in commits:
         author = commit.get("author_handle", "unknown")
+        branch = commit.get("branch", "")
         _touch_engineer(author)
         commit_datapoint = Commit(
             sha=commit["sha"],
@@ -228,12 +232,14 @@ def repo_to_datapoints(
             author_handle=author,
             timestamp=commit["timestamp"],
             files_touched=commit.get("files_touched", []),
+            branch=branch,
         )
-        commit_by_sha[commit["sha"]] = commit_datapoint
+        commit_by_key[(commit["sha"], branch)] = commit_datapoint
         datapoints.append(commit_datapoint)
 
     for pr in prs:
         author = pr.get("author_handle", "unknown")
+        branch = pr.get("branch", "")
         _touch_engineer(author)
         for reviewer in pr.get("reviewer_handles", []):
             _touch_engineer(reviewer)
@@ -245,22 +251,30 @@ def repo_to_datapoints(
             files_changed=pr.get("files_changed", []),
             reviewer_handles=pr.get("reviewer_handles", []),
             merged=pr.get("merged", False),
+            branch=branch,
         )
-        pr_by_number[pr["number"]] = pr_datapoint
+        pr_by_key[(pr["number"], branch)] = pr_datapoint
         datapoints.append(pr_datapoint)
 
     datapoints.extend(engineers_by_handle.values())
-    return datapoints, commit_by_sha, pr_by_number
+    return datapoints, commit_by_key, pr_by_key
 
 
 async def ingest_repo_into_memory(
     repo_full_name: str,
+    branches: list[str] | None = None,
     commit_limit: int = 20,
     pr_limit: int = 10,
 ) -> dict:
     """
     End-to-end: fetch from GitHub -> extract via Gemini -> push to Cognee.
-    Returns a dict with counts: {'commits': N, 'prs': M, 'decisions': X, ...}
+    Returns a dict with counts: {'commits': N, 'prs': M, 'decisions': X, ...,
+    'branches_ingested': [...], 'commits_per_branch': {...}, 'prs_per_branch': {...}}.
+
+    If branches is None/empty, ingests just the repo's default branch (backward-compatible
+    with the original single-branch behavior). If provided, fetches and merges commits/PRs/
+    files from every listed branch before pushing one combined graph to Cognee — 'commits',
+    'prs', and 'files' in the returned dict are totals across all branches.
 
     NOTE on Cognee API: cognee.add() + cognee.cognify() is Cognee's pipeline for raw,
     unstructured documents (it chunks text and uses an LLM to extract a graph from it).
@@ -276,40 +290,62 @@ async def ingest_repo_into_memory(
     print(f"Ingesting {repo_full_name} into memory...")
     ingestor = GitHubIngestor(GITHUB_TOKEN, repo_full_name)
 
-    print("Fetching commits, pull requests, and file tree from GitHub...")
-    commits = ingestor.fetch_commits(limit=commit_limit)
-    prs = ingestor.fetch_pull_requests(limit=pr_limit)
-    file_tree = ingestor.fetch_file_tree()
+    resolved_branches = branches if branches else [ingestor.repo.default_branch]
+
+    all_commits: list[dict] = []
+    all_prs: list[dict] = []
+    all_file_tree: list[dict] = []
+    commits_per_branch: dict[str, int] = {}
+    prs_per_branch: dict[str, int] = {}
+
+    for branch in resolved_branches:
+        print(f"Ingesting branch '{branch}'...")
+        branch_commits = ingestor.fetch_commits(branch=branch, limit=commit_limit)
+        branch_prs = ingestor.fetch_pull_requests(base_branch=branch, limit=pr_limit)
+        branch_files = ingestor.fetch_file_tree(branch=branch)
+        print(
+            f"  Fetched {len(branch_commits)} commits, {len(branch_prs)} PRs, "
+            f"{len(branch_files)} files"
+        )
+
+        all_commits.extend(branch_commits)
+        all_prs.extend(branch_prs)
+        all_file_tree.extend(branch_files)
+        commits_per_branch[branch] = len(branch_commits)
+        prs_per_branch[branch] = len(branch_prs)
 
     print("Extracting memory-worthy signals via Gemini...")
-    commit_results = await extract_from_commits(commits)
-    pr_results = await extract_from_prs(prs)
+    commit_results = await extract_from_commits(all_commits)
+    pr_results = await extract_from_prs(all_prs)
 
     print("Building Cognee DataPoints...")
-    datapoints, commit_by_sha, pr_by_number = repo_to_datapoints(
-        commits, prs, file_tree, repo_full_name
+    datapoints, commit_by_key, pr_by_key = repo_to_datapoints(
+        all_commits, all_prs, all_file_tree, repo_full_name
     )
 
     counts = {
-        "commits": len(commits),
-        "prs": len(prs),
-        "files": len(file_tree),
+        "commits": len(all_commits),
+        "prs": len(all_prs),
+        "files": len(all_file_tree),
         "decisions": 0,
         "deprecations": 0,
         "incidents": 0,
         "conventions": 0,
+        "branches_ingested": resolved_branches,
+        "commits_per_branch": commits_per_branch,
+        "prs_per_branch": prs_per_branch,
     }
 
-    for commit, result in zip(commits, commit_results):
-        source_commit = commit_by_sha[commit["sha"]]
+    for commit, result in zip(all_commits, commit_results):
+        source_commit = commit_by_key[(commit["sha"], commit.get("branch", ""))]
         datapoints.extend(commit_to_datapoints(commit, result, source_commit))
         counts["decisions"] += len(result.decisions)
         counts["deprecations"] += len(result.deprecations)
         counts["incidents"] += len(result.incidents)
         counts["conventions"] += len(result.conventions)
 
-    for pr, result in zip(prs, pr_results):
-        source_pr = pr_by_number[pr["number"]]
+    for pr, result in zip(all_prs, pr_results):
+        source_pr = pr_by_key[(pr["number"], pr.get("branch", ""))]
         datapoints.extend(pr_to_datapoints(pr, result, source_pr))
         counts["decisions"] += len(result.decisions)
         counts["deprecations"] += len(result.deprecations)
