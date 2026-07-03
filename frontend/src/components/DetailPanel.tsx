@@ -25,9 +25,12 @@ export default function DetailPanel({ node, onClose }: Props) {
   const color = NODE_COLORS[node.type] || NODE_COLORS.Unknown;
 
   // Group attributes into "core" and "metadata"
-  const coreFields = pickCoreFields(node);
+  const coreFields = pickCoreFields(node).filter(([, val]) => !isEmptyValue(val));
   const metadataFields = Object.entries(node.attributes).filter(
-    ([k]) => !coreFields.some(([ck]) => ck === k) && !isNoiseField(k)
+    ([k, val]) =>
+      !coreFields.some(([ck]) => ck === k) &&
+      !isNoiseField(k) &&
+      !isEmptyValue(val)
   );
 
   return (
@@ -190,8 +193,36 @@ function pickCoreFields(node: GraphNode): [string, unknown][] {
 }
 
 function isNoiseField(key: string): boolean {
-  // Fields we don't want to show as metadata — internal Cognee bookkeeping
-  return key.startsWith("_") || ["id", "updated_at", "version"].includes(key);
+  // Fields we don't want to show — internal Cognee bookkeeping OR redundant with header
+  const HIDE_ALWAYS = new Set([
+    "id",
+    "type",              // shown in header
+    "name",              // usually empty for our DataPoints
+    "created_at",        // Cognee internal timestamp (Unix ms)
+    "updated_at",        // Cognee internal timestamp
+    "version",           // Cognee internal
+    "ontology_valid",    // implementation detail
+    "topological_rank",  // implementation detail
+    "metadata",          // raw dict of index_fields — noise
+    "belongs_to_set",    // usually empty
+    "source_pipeline",   // usually empty
+    "source_task",       // usually empty
+    "source_node_set",   // usually empty
+    "source_user",       // usually empty
+    "source_content_hash", // usually null
+    "feedback_weight",   // internal weighting
+    "importance_weight", // internal weighting
+  ]);
+  if (HIDE_ALWAYS.has(key)) return true;
+  if (key.startsWith("_")) return true;
+  return false;
+}
+
+function isEmptyValue(val: unknown): boolean {
+  if (val === null || val === undefined) return true;
+  if (typeof val === "string" && val.trim() === "") return true;
+  if (Array.isArray(val) && val.length === 0) return true;
+  return false;
 }
 
 function formatFieldName(key: string): string {
