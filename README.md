@@ -25,10 +25,21 @@ So you correct them. The same correction. In every new chat. Every session. Fore
 RepoBrain turns your repo's history into a queryable memory graph, then makes that graph
 available to any AI coding tool through a standard interface.
 
-1. Ingest any GitHub repo — commits, PRs, decisions, deprecations, incidents extracted into a typed knowledge graph
-2. Query the graph via CLI or MCP — get answers with multi-source confidence scoring
-3. Any AI coding tool plugs in via MCP — Cursor, Claude Code, Cline, Continue
-4. Forget stale memories with a visible audit trail
+- **Ingest any GitHub repo** — commits, PRs, decisions, deprecations, incidents extracted into a typed knowledge graph
+- **Query the graph via CLI or MCP** — get answers with multi-source confidence scoring
+- **Any AI coding tool plugs in via MCP** — Cursor, Claude Code, Cline, Continue
+- **Forget stale memories** with a visible audit trail
+
+## All four memory operations, first-class
+
+RepoBrain implements the complete memory lifecycle — remember, recall, improve, and forget:
+
+| Operation | How RepoBrain does it |
+|---|---|
+| **remember()** | `repobrain ingest` turns commits, PRs, and branches into typed nodes with real edges; `remember_instruction` (MCP) stores standing instructions from any AI tool |
+| **recall()** | `repobrain ask` and the `recall` MCP tool synthesize answers from multiple memories, with per-source citations, confidence scoring, and branch-divergence detection |
+| **improve()** | `capture_correction` (MCP) turns every "no, we use Fastify, not Express" into a first-class Correction node — corrected once, recalled by every connected tool, in every future session. Confidence strengthens as independent memories accumulate |
+| **forget()** | `preview_forget` → `forget_memories` removes stale memories behind a tuned relevance threshold, and records every deletion as an audit **ForgetEvent** — the graph knows what it forgot, and why |
 
 ## How it's different
 
@@ -36,7 +47,7 @@ available to any AI coding tool through a standard interface.
 - **Multi-source confidence.** Answers cite their sources; HIGH confidence means 3+ independent nodes agree; LOW confidence is honest, not hedged.
 - **Branch-aware.** RepoBrain knows which branch a decision lives on and surfaces divergence between branches.
 - **Forget is first-class.** Removing stale memories creates an audit `ForgetEvent` — the graph knows what was removed and why.
-- **Built on Cognee.** Uses the open-source Cognee SDK's low-level API (`add_data_points`, `GraphCompletionRetriever`) with custom typed schemas, not the high-level RAG wrapper.
+- **Built on Cognee — the deep way.** Uses the open-source Cognee SDK's low-level API (`add_data_points`, `GraphCompletionRetriever`) with custom typed schemas and deterministic identity-based node IDs, not the high-level RAG wrapper. Forget relevance filtering surfaces cosine vector distances Cognee computes internally but doesn't expose.
 
 ## Demo walkthrough
 
@@ -128,7 +139,9 @@ cd frontend && npm install && npm run dev  # in another
 
 ### Optional: connect to your AI coding tool via MCP
 
-RepoBrain ships with a working MCP server in `mcp_server/repobrain.py`. To connect it to Claude Code, add to your `.mcp.json`:
+RepoBrain ships with a working MCP server in `mcp_server/repobrain.py`, exposing three tools:
+`remember_instruction`, `capture_correction`, and `recall`. To connect it to Claude Code, add to
+your `.mcp.json`:
 
 ```json
 {
@@ -153,9 +166,10 @@ Today RepoBrain has the memory layer, the graph explorer, and the CLI/MCP interf
 
 ## What we built this for
 
-Built for the WeMakeDevs × Cognee "Hangover Hackathon" (June 2026). We felt the pain we're
+Built for the WeMakeDevs × Cognee **"Hangover Hackathon"** (June 2026). We felt the pain we're
 solving: this entire project was built with Claude Code, and every time it forgot a decision
-we'd made two hours earlier, we felt the exact gap RepoBrain fills.
+we'd made two hours earlier, we felt the exact gap RepoBrain fills. Our AI woke up with no
+memory of last night — so we built it a brain that doesn't forget.
 
 Built on the open-source [Cognee SDK](https://github.com/topoteretes/cognee) — using the
 low-level `add_data_points` + `GraphCompletionRetriever` APIs with custom typed schemas rather
