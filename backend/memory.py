@@ -39,6 +39,22 @@ cognee.config.set_embedding_provider("gemini")
 cognee.config.set_embedding_model("gemini/gemini-embedding-001")
 cognee.config.set_embedding_api_key(GEMINI_API_KEY)
 
+# Forget engine relevance threshold.
+# Cognee returns cosine distance (0 = identical, 2 = opposite).
+# Nodes must be within this distance to be considered "relevant enough to forget."
+#
+# Tuned empirically against this project's embedded corpus (gemini-embedding-001):
+#   exact-text match            ~0.11
+#   partial/keyword match       ~0.21
+#   semantic paraphrase         ~0.32
+#   vague/generic query         ~0.40  (starts blending into noise)
+#   unrelated/nonsense query    0.40-0.55 (noise floor)
+# 0.6 (the initial guess) turned out to sit inside the noise floor, not above it —
+# every query, including "banana pancakes" and "asdfghjkl", returned 20/20 matches
+# at that threshold. 0.35 sits in the gap between real semantic matches (<=0.32)
+# and the noise floor (>=0.40), with margin on both sides.
+FORGET_RELEVANCE_THRESHOLD = 0.35
+
 _setup_lock = asyncio.Lock()
 _setup_done = False
 
@@ -703,32 +719,88 @@ async def search_memory_with_confidence(
     }
 
 
+async def _search_with_scores(query: str, top_k: int) -> list[dict]:
+    """
+    Direct wrapper over GraphCompletionRetriever that preserves each node's cosine
+    vector_distance — dropped by search_memory/_summarize_node, since ordinary
+    callers (ask, MCP) don't need it, but the forget engine does for its relevance
+    cutoff (see FORGET_RELEVANCE_THRESHOLD).
+
+    Investigated whether to bypass the retriever and hit cognee's vector engine
+    directly (get_vector_engine().search(...)): unnecessary. CogneeGraph's triplet
+    scoring step (map_vector_distances_to_graph_nodes, in
+    cognee.modules.graph.cognee_graph.CogneeGraph) already computes each retrieved
+    node's cosine distance for this exact query and annotates it onto the node's
+    own .attributes as "vector_distance" (a list, one entry per query — length 1
+    here since we only ever call get_triplets in single-query mode) before ranking
+    triplets by it. That annotation is present on the very Node objects get_triplets()
+    already returns; _summarize_node just never surfaced it. So the fix is reading
+    what's already there, not a second search path.
+
+    Returns one dict per unique matched node (deduped by id, both triplet sides
+    considered), with full DataPoint fields merged in from the graph engine (the
+    same enrichment _summarize_node does) plus a "distance" float: cosine distance
+    in [0, 2], lower = more relevant. A node whose distance can't be resolved is
+    dropped rather than guessed at — safer than assuming it's either relevant or not.
+    """
+    retriever = GraphCompletionRetriever(top_k=top_k)
+    triplets = await retriever.get_triplets(query)
+
+    graph_engine = await get_graph_engine()
+    raw_nodes, _raw_edges = await graph_engine.get_graph_data()
+    full_attrs_by_id = {str(node_id): attrs for node_id, attrs in raw_nodes}
+
+    seen_ids: set[str] = set()
+    results: list[dict] = []
+    for edge in triplets:
+        for node in (edge.get_source_node(), edge.get_destination_node()):
+            node_id = str(node.id)
+            if node_id in seen_ids:
+                continue
+            seen_ids.add(node_id)
+
+            distances = node.attributes.get("vector_distance")
+            if not isinstance(distances, list) or not distances:
+                continue
+            try:
+                distance = float(distances[0])
+            except (TypeError, ValueError):
+                continue
+
+            summarized = _summarize_node(node, full_attrs_by_id)
+            summarized["distance"] = distance
+            results.append(summarized)
+
+    return results
+
+
 async def preview_forget(query: str, top_k: int = 20) -> list[dict]:
     """
     Preview what would be forgotten if this query were executed.
-    Returns a list of node dicts matching the query, without deleting anything.
-    Similar to search_memory but with a higher top_k (users may want to forget many nodes at once).
-    Excludes ForgetEvent nodes from the results (we don't forget the forget log).
+    Returns nodes matching the query WITHIN the relevance threshold
+    (FORGET_RELEVANCE_THRESHOLD) — not just search_memory's raw top-k, which has no
+    similarity cutoff and returns top_k nodes for literally any query once the graph
+    is large enough (confirmed: an unrelated query like "banana pancakes" returned
+    20 "matches" before this fix). Excludes ForgetEvent nodes (we don't forget the
+    forget log).
 
     Unlike _extract_semantic_sources, this is not limited to SEMANTIC_SOURCE_TYPES —
     forgetting should be able to target structural nodes too (a Commit, an Engineer who
     left, a CodeFile that was deleted), not just Decision/Incident/etc.
     """
-    results = await search_memory(query, top_k=top_k)
+    # Oversample so that filtering out ForgetEvent nodes and below-threshold
+    # candidates still leaves up to top_k genuinely relevant results.
+    candidates = await _search_with_scores(query, top_k * 2)
 
-    seen_ids = set()
-    nodes: list[dict] = []
-    for r in results:
-        for side in ("source", "target"):
-            node = r.get(side)
-            if not node or node.get("type") == "ForgetEvent":
-                continue
-            node_id = node.get("id")
-            if not node_id or node_id in seen_ids:
-                continue
-            seen_ids.add(node_id)
-            nodes.append(node)
-    return nodes
+    relevant = [
+        c
+        for c in candidates
+        if c.get("distance", float("inf")) <= FORGET_RELEVANCE_THRESHOLD
+        and c.get("type") != "ForgetEvent"
+    ]
+    relevant.sort(key=lambda c: c["distance"])
+
+    return relevant[:top_k]
 
 
 async def forget_memories(query: str, reason: str, top_k: int = 20) -> dict:
