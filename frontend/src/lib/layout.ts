@@ -35,7 +35,7 @@ interface SimLink {
  * final positions. This produces a "settled" graph — no live jitter, no
  * ongoing motion after mount.
  */
-export function computeLayout(nodes: ApiNode[], edges: ApiEdge[]): LayoutedNode[] {
+export function computeLayout(nodes: ApiNode[], edges: ApiEdge[], maxNodeSize: number = 60): LayoutedNode[] {
   const connectedIds = new Set<string>();
   for (const edge of edges) {
     connectedIds.add(edge.source);
@@ -77,7 +77,7 @@ export function computeLayout(nodes: ApiNode[], edges: ApiEdge[]): LayoutedNode[
     )
     .force("charge", forceManyBody().strength(-320))
     .force("center", forceCenter(0, 0).strength(0.05))
-    .force("collide", forceCollide().radius(38).strength(0.9))
+    .force("collide", forceCollide().radius(maxNodeSize * 0.9).strength(0.9))
     // Push isolated nodes toward the periphery
     .force(
       "x-isolated",

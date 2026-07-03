@@ -13,10 +13,14 @@ export interface GraphNodeData {
   isHighlighted: boolean;
   isQueryMatch: boolean;
   isLabelVisible: boolean;
+  sizeBase?: number;
+  sizeLarge?: number;
 }
 
 export default function GraphNode({ data }: NodeProps<GraphNodeData>) {
-  const size = data.isLarge ? NODE_SIZE_LARGE : NODE_SIZE_BASE;
+  const size = data.isLarge
+    ? data.sizeLarge ?? NODE_SIZE_LARGE
+    : data.sizeBase ?? NODE_SIZE_BASE;
   const color = NODE_COLORS[data.type] || NODE_COLORS.Unknown;
   const showBranch = hasBranchContext(data.branch);
 

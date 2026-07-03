@@ -47,3 +47,82 @@ html, body {
 .react-flow__attribution {
   display: none; /* remove "React Flow" watermark */
 }
+
+.markdown-compact {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.markdown-compact h1,
+.markdown-compact h2,
+.markdown-compact h3,
+.markdown-compact h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 8px;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+}
+
+.markdown-compact h1:first-child,
+.markdown-compact h2:first-child,
+.markdown-compact h3:first-child {
+  margin-top: 0;
+}
+
+.markdown-compact p {
+  margin: 4px 0;
+}
+
+.markdown-compact ul,
+.markdown-compact ol {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.markdown-compact li {
+  margin: 2px 0;
+}
+
+.markdown-compact code {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 12px;
+  font-family: var(--font-geist-mono, monospace);
+}
+
+.markdown-compact pre {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  font-size: 12px;
+  overflow-x: auto;
+}
+
+.markdown-compact pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown-compact a {
+  color: hsl(217, 91%, 65%);
+  text-decoration: none;
+}
+
+.markdown-compact a:hover {
+  text-decoration: underline;
+}
+
+.markdown-compact strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.markdown-compact blockquote {
+  border-left: 2px solid var(--panel-border);
+  padding-left: 10px;
+  margin: 6px 0;
+  color: var(--text-secondary);
+}

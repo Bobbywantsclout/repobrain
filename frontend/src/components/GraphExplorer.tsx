@@ -15,7 +15,7 @@ import ReactFlow, {
 } from "reactflow";
 import GraphNode, { GraphNodeData } from "./GraphNode";
 import { computeLayout } from "@/lib/layout";
-import { LARGE_NODE_EDGE_THRESHOLD, NODE_SIZE_BASE, NODE_SIZE_LARGE, DIMMED_OPACITY } from "@/lib/design";
+import { LARGE_NODE_EDGE_THRESHOLD, DIMMED_OPACITY, getNodeSizes } from "@/lib/design";
 import type { GraphResponse, GraphNode as ApiNode } from "@/lib/api";
 
 const nodeTypes = {
@@ -58,8 +58,11 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
     return counts;
   }, [data.edges]);
 
+  // Node sizes scale with graph density — fewer nodes render larger
+  const sizes = useMemo(() => getNodeSizes(data.nodes.length), [data.nodes.length]);
+
   // Compute static layout once (deterministic)
-  const layout = useMemo(() => computeLayout(data.nodes, data.edges), [data]);
+  const layout = useMemo(() => computeLayout(data.nodes, data.edges, sizes.large), [data, sizes.large]);
   const positionById = useMemo(() => {
     const map: Record<string, { x: number; y: number }> = {};
     for (const p of layout) map[p.id] = { x: p.x, y: p.y };
@@ -120,7 +123,7 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
       // completes under React 19 — nodes stay permanently visibility:hidden and no
       // edges render, since edge paths need known endpoint dimensions. Pre-supplying
       // width/height lets React Flow skip that broken measurement step entirely.
-      const size = isLarge ? NODE_SIZE_LARGE : NODE_SIZE_BASE;
+      const size = isLarge ? sizes.large : sizes.base;
       return {
         id: n.id,
         type: "graphNode",
@@ -136,10 +139,12 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
           isHighlighted: false,
           isQueryMatch: false,
           isLabelVisible: false,
+          sizeBase: sizes.base,
+          sizeLarge: sizes.large,
         },
       };
     });
-  }, [data.nodes, positionById, edgeCountById]);
+  }, [data.nodes, positionById, edgeCountById, sizes]);
 
   const initialEdges: RFEdge[] = useMemo(() => {
     return data.edges.map((e) => ({

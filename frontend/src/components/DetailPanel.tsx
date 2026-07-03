@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { GraphNode } from "@/lib/api";
 import { NODE_COLORS } from "@/lib/design";
 
@@ -25,10 +27,14 @@ export default function DetailPanel({ node, onClose }: Props) {
   const color = NODE_COLORS[node.type] || NODE_COLORS.Unknown;
 
   // Group attributes into "core" and "metadata"
-  const coreFields = pickCoreFields(node).filter(([, val]) => !isEmptyValue(val));
+  const redundant = getRedundantFields(node.type);
+  const coreFields = pickCoreFields(node)
+    .filter(([k]) => !redundant.has(k))
+    .filter(([, val]) => !isEmptyValue(val));
   const metadataFields = Object.entries(node.attributes).filter(
     ([k, val]) =>
       !coreFields.some(([ck]) => ck === k) &&
+      !redundant.has(k) &&
       !isNoiseField(k) &&
       !isEmptyValue(val)
   );
@@ -97,16 +103,10 @@ export default function DetailPanel({ node, onClose }: Props) {
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-5 py-4">
         {/* Label */}
-        <div className="mb-6">
+        <div className="mb-5">
           <div
-            className="text-xs uppercase tracking-wider mb-1"
-            style={{ color: "var(--text-secondary)" }}
-          >
-            Label
-          </div>
-          <div
-            className="text-sm leading-relaxed"
-            style={{ color: "var(--text-primary)" }}
+            className="text-base leading-snug"
+            style={{ color: "var(--text-primary)", fontWeight: 500 }}
           >
             {node.label}
           </div>
@@ -114,53 +114,45 @@ export default function DetailPanel({ node, onClose }: Props) {
 
         {/* Core fields */}
         {coreFields.length > 0 && (
-          <div className="mb-6 space-y-4">
+          <div className="space-y-3">
             {coreFields.map(([key, val]) => (
-              <div key={key}>
+              <div key={key} className="flex gap-4 text-sm">
                 <div
-                  className="text-xs uppercase tracking-wider mb-1"
+                  className="min-w-[80px] flex-shrink-0 text-xs uppercase tracking-wider pt-0.5"
                   style={{ color: "var(--text-secondary)" }}
                 >
                   {formatFieldName(key)}
                 </div>
                 <div
-                  className="text-sm leading-relaxed break-words"
+                  className="flex-1 break-words leading-relaxed overflow-hidden"
                   style={{ color: "var(--text-primary)" }}
                 >
-                  {formatFieldValue(val)}
+                  {formatFieldValue(val, key)}
                 </div>
               </div>
             ))}
           </div>
         )}
 
-        {/* Metadata (collapsed by default in future — for now, small text) */}
+        {/* Metadata — compact two-column layout matching core fields */}
         {metadataFields.length > 0 && (
-          <div>
-            <div
-              className="text-xs uppercase tracking-wider mb-2"
-              style={{ color: "var(--text-secondary)" }}
-            >
-              Metadata
-            </div>
-            <div className="space-y-2">
-              {metadataFields.map(([key, val]) => (
-                <div key={key} className="flex gap-3 text-xs">
-                  <div
-                    className="min-w-[80px]"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    {formatFieldName(key)}
-                  </div>
-                  <div
-                    className="flex-1 break-words"
-                    style={{ color: "var(--text-primary)" }}
-                  >
-                    {formatFieldValue(val)}
-                  </div>
+          <div className="space-y-3 mt-3">
+            {metadataFields.map(([key, val]) => (
+              <div key={key} className="flex gap-4 text-sm">
+                <div
+                  className="min-w-[80px] flex-shrink-0 text-xs uppercase tracking-wider pt-0.5"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  {formatFieldName(key)}
                 </div>
-              ))}
-            </div>
+                <div
+                  className="flex-1 break-words leading-relaxed overflow-hidden"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {formatFieldValue(val, key)}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -190,6 +182,24 @@ function pickCoreFields(node: GraphNode): [string, unknown][] {
   return keys
     .filter((k) => attrs[k] !== undefined && attrs[k] !== null && attrs[k] !== "")
     .map((k) => [k, attrs[k]] as [string, unknown]);
+}
+
+function getRedundantFields(nodeType: string): Set<string> {
+  // Fields whose value is identical to (or a superset of) the header label
+  const map: Record<string, string[]> = {
+    PullRequest: ["title"],       // title is what generates the label
+    Commit: ["message"],           // message is what generates the label
+    Decision: [],                  // content IS shown but only once
+    Deprecation: [],
+    Incident: [],
+    Convention: [],
+    CodeFile: ["path"],            // path IS the label
+    Engineer: ["name"],            // name IS the label
+    ChatSession: [],
+    UserInstruction: ["content"],
+    Correction: ["user_said"],
+  };
+  return new Set(map[nodeType] || []);
 }
 
 function isNoiseField(key: string): boolean {
@@ -226,15 +236,69 @@ function isEmptyValue(val: unknown): boolean {
 }
 
 function formatFieldName(key: string): string {
+  const overrides: Record<string, string> = {
+    "author_handle": "Author",
+    "made_by_handle": "Made by",
+    "made_on": "When",
+    "source_ref": "From",
+    "source_type": "Source type",
+    "github_handle": "GitHub",
+    "reviewer_handles": "Reviewers",
+    "files_touched": "Files",
+    "files_changed": "Files",
+    "files_involved": "Files",
+    "modules_owned": "Modules",
+    "deprecated_on": "When",
+    "replaced_with": "Replaced with",
+    "what_broke": "Issue",
+    "root_cause": "Root cause",
+    "established_on": "Since",
+    "given_at": "When",
+    "started_at": "Started",
+    "session_id": "Session",
+    "project_context": "Project",
+    "ai_suggested": "AI suggested",
+    "user_said": "User said",
+  };
+  if (overrides[key]) return overrides[key];
   return key.replace(/_/g, " ").replace(/^(.)/, (m) => m.toUpperCase());
 }
 
-function formatFieldValue(val: unknown): string {
+// Fields that should render as markdown
+const MARKDOWN_FIELDS = new Set([
+  "description",   // PR body
+  "message",       // commit message
+  "content",       // Decision, UserInstruction
+  "what_broke",    // Incident
+  "root_cause",    // Incident
+  "why",           // Deprecation
+]);
+
+function formatFieldValue(val: unknown, key?: string): ReactNode {
   if (val === null || val === undefined) return "—";
   if (typeof val === "boolean") return val ? "yes" : "no";
   if (Array.isArray(val)) return val.length === 0 ? "—" : val.map((v) => String(v)).join(", ");
   if (typeof val === "object") return JSON.stringify(val, null, 2);
   const str = String(val);
+
+  // Truncate SHAs to first 10 chars (dev convention: short SHAs are usable identifiers)
+  if (key === "sha" && str.length > 10) {
+    return <span className="font-mono">{str.slice(0, 10)}</span>;
+  }
+  if (key === "source_ref" && /^[0-9a-f]{7,}$/i.test(str) && str.length > 10) {
+    return <span className="font-mono">{str.slice(0, 10)}</span>;
+  }
+
   // Truncate very long values with an ellipsis
-  return str.length > 500 ? str.slice(0, 500) + "…" : str;
+  const truncated = str.length > 500 ? str.slice(0, 500) + "…" : str;
+
+  if (key && MARKDOWN_FIELDS.has(key)) {
+    return (
+      <div className="markdown-compact">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{truncated}</ReactMarkdown>
+      </div>
+    );
+  }
+
+  return truncated;
 }

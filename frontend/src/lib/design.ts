@@ -16,8 +16,18 @@ export const NODE_COLORS: Record<NodeType, string> = {
   Unknown: "hsl(220, 9%, 30%)",           // gray-700
 };
 
-export const NODE_SIZE_BASE = 32;
-export const NODE_SIZE_LARGE = 48;
+// Base and large sizes scale slightly with graph density
+// Fewer nodes = larger nodes (they should visually fill more space)
+// More nodes = compact nodes (they need to fit)
+export function getNodeSizes(totalNodes: number): { base: number; large: number } {
+  if (totalNodes < 30) return { base: 56, large: 76 };
+  if (totalNodes < 80) return { base: 48, large: 66 };  // most common range
+  if (totalNodes < 200) return { base: 42, large: 58 };
+  return { base: 36, large: 50 };  // very dense
+}
+
+export const NODE_SIZE_BASE = 44;   // fallback / minimum
+export const NODE_SIZE_LARGE = 60;  // fallback
 
 // A node is "large" if it's referenced by 3+ edges (highly-connected → likely important)
 export const LARGE_NODE_EDGE_THRESHOLD = 3;

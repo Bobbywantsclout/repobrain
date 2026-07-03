@@ -41,13 +41,13 @@ export default function QueryBar({ value, onChange }: Props) {
       }}
     >
       <div
-        className="pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full border"
+        className="pointer-events-auto flex items-center gap-3 px-5 py-3 rounded-full border"
         style={{
           background: "rgba(15, 22, 36, 0.85)",
           backdropFilter: "blur(12px)",
           WebkitBackdropFilter: "blur(12px)",
           borderColor: "var(--panel-border)",
-          minWidth: "360px",
+          minWidth: "500px",
           boxShadow: "0 4px 24px rgba(0, 0, 0, 0.3)",
         }}
       >
@@ -63,7 +63,7 @@ export default function QueryBar({ value, onChange }: Props) {
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="What are you working on?"
-          className="flex-1 bg-transparent outline-none text-sm"
+          className="flex-1 bg-transparent outline-none text-base"
           style={{ color: "var(--text-primary)" }}
           aria-label="Query the graph"
         />
