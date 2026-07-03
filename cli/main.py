@@ -9,92 +9,74 @@ console = Console()
 
 try:
     from backend.config import parse_github_repo
-    from backend.memory import get_divergent_branches, ingest_repo_into_memory, search_memory
+    from backend.memory import (
+        get_divergent_branches,
+        ingest_repo_into_memory,
+        search_memory_with_confidence,
+    )
 except RuntimeError as e:
     console.print(f"[red]Configuration error:[/red] {e}")
     sys.exit(1)
 
-SEMANTIC_TYPES = {"Decision", "Deprecation", "Incident", "Convention"}
+CONFIDENCE_STYLES = {
+    "HIGH": "bold green",
+    "MEDIUM": "bold yellow",
+    "LOW": "dim",
+}
+
+TYPE_COLORS = {
+    "Decision": "blue",
+    "Deprecation": "red",
+    "Incident": "orange3",
+    "Convention": "green",
+    "UserInstruction": "magenta",
+    "Correction": "magenta",
+}
 
 
-def _node_dedup_key(node: dict):
-    return (
-        node.get("type"),
-        node.get("content") or node.get("what_broke") or node.get("what") or node.get("rule"),
-    )
+def _type_color(node_type: str) -> str:
+    return TYPE_COLORS.get(node_type, "dim")
 
 
-def _extract_nodes(results: list[dict]) -> list[dict]:
-    """Flatten search_memory's triplet results into a deduped list of semantic-type nodes.
-
-    search_memory returns {source, relationship, target} triplets — either side can be the
-    semantic node depending on which direction the retriever matched the query. We dedupe on
-    (type, headline text) rather than "id", since the id field coming back through the graph
-    retriever is unreliable (frequently None in practice).
-
-    Each extracted node is enriched with "_linked_node" (the other side of the triplet —
-    the Commit/PullRequest it references, if any) and "_relationship" (the edge name, e.g.
-    "source_commit"/"source_pr"), since only Decision has its own source_type field —
-    Deprecation/Incident/Convention need the edge itself to know commit-vs-PR provenance.
-    """
-    seen = set()
-    nodes = []
-    for r in results:
-        pairs = [(r.get("source"), r.get("target")), (r.get("target"), r.get("source"))]
-        for node, other in pairs:
-            if not node or node.get("type") not in SEMANTIC_TYPES:
-                continue
-            dedup_key = _node_dedup_key(node)
-            if dedup_key in seen:
-                continue
-            seen.add(dedup_key)
-            enriched = dict(node)
-            enriched["_linked_node"] = other
-            enriched["_relationship"] = r.get("relationship")
-            nodes.append(enriched)
-    return nodes
-
-
-def _format_source(node: dict) -> str:
+def _format_source_ref(node: dict) -> str:
+    """Bare 'PR #292' / 'abc1234' / 'unknown source' — no parens, no leading word,
+    for the compact `▸ Type · from <this> · branch: ...` source line."""
     linked = node.get("_linked_node") or {}
     relationship = node.get("_relationship")
 
     if relationship == "source_commit" and linked.get("type") == "Commit":
         sha = linked.get("sha")
         if sha:
-            return f"(from commit {sha[:7]})"
+            return sha[:7]
     if relationship == "source_pr" and linked.get("type") == "PullRequest":
         number = linked.get("number")
         if number is not None:
-            return f"(from PR #{number})"
+            return f"PR #{number}"
 
     if node.get("type") == "Convention":
         refs = node.get("source_refs") or []
-        if not refs:
-            return ""
-        if len(refs) == 1:
-            return f"(from {refs[0]})"
-        return f"(from {len(refs)} sources)"
+        if refs:
+            return refs[0] if len(refs) == 1 else f"{len(refs)} sources"
 
     # Fallback: only Decision carries its own source_type/source_ref fields.
     source_type = node.get("source_type")
     source_ref = node.get("source_ref")
     if source_ref and source_type == "commit":
-        return f"(from commit {source_ref[:7]})"
+        return source_ref[:7]
     if source_ref and source_type == "pr":
-        return f"(from PR #{source_ref})"
-    return ""
+        return f"PR #{source_ref}"
+
+    return "unknown source"
 
 
 def _format_branch(node: dict) -> str:
-    # Direct: Commit/PullRequest carry their own "branch" field.
+    """Returns "" (not a placeholder string) when no branch is known, so callers can
+    skip the "· branch: ..." segment entirely rather than showing a hollow tag."""
     branch = node.get("branch")
     if not branch:
-        # Indirect: semantic nodes (Decision/Deprecation/Incident/Convention) don't have
-        # a branch field themselves — read it off the linked Commit/PullRequest instead.
         linked = node.get("_linked_node") or {}
         branch = linked.get("branch")
-    return branch or "unknown branch"
+    return branch or ""
 
 
 def _format_content(node: dict) -> str:
@@ -109,6 +91,10 @@ def _format_content(node: dict) -> str:
         return f"{what} → {replaced}" if replaced else what
     if node_type == "Convention":
         return node.get("rule", "")
+    if node_type == "UserInstruction":
+        return node.get("content", "")
+    if node_type == "Correction":
+        return f"AI suggested '{node.get('ai_suggested', '')}', user said '{node.get('user_said', '')}'"
     return str(node)
 
 
@@ -162,38 +148,40 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
 def cmd_ask(args: argparse.Namespace) -> None:
     try:
-        results = asyncio.run(search_memory(args.question, top_k=args.top_k, branch=args.branch))
+        result = asyncio.run(
+            search_memory_with_confidence(args.question, top_k=args.top_k, branch=args.branch)
+        )
     except Exception as e:
         console.print(f"[red]Search failed:[/red] {type(e).__name__}: {e}")
         sys.exit(1)
 
-    console.print(f"[bold]Question:[/bold] {args.question}")
-    console.rule(style="dim")
+    console.print(f"[bold]Answer:[/bold] {result['answer']}")
     console.print()
 
-    nodes = _extract_nodes(results)
+    confidence = result["confidence"]
+    confidence_style = CONFIDENCE_STYLES.get(confidence, "dim")
+    console.print(
+        f"[bold]Confidence:[/bold] [{confidence_style}]{confidence}[/{confidence_style}]"
+        f" [dim]— {result['confidence_reason']}[/dim]"
+    )
+    console.print()
 
-    if not nodes:
-        answers = [r["answer"] for r in results if "answer" in r]
-        if answers:
-            console.print(answers[0])
-        else:
-            console.print(
-                "[yellow]No memory nodes found for this question yet.[/yellow] "
-                "Try ingesting a repo first with `repobrain ingest <repo>`."
-            )
+    sources = result["sources"]
+    if not sources:
+        console.print(
+            "[yellow]No memory nodes found for this question yet.[/yellow] "
+            "Try ingesting a repo first with `repobrain ingest <repo>`."
+        )
     else:
-        for i, node in enumerate(nodes[: args.top_k], start=1):
-            branch_tag = _format_branch(node)
-            source_tag = _format_source(node).strip("()")
-            header = (
-                f"[bold cyan][{i}][/bold cyan] [bold]{node['type']}[/bold]"
-                f"  |  branch: {branch_tag}"
-            )
-            if source_tag:
-                header += f"  |  {source_tag}"
-            console.print(header)
-            console.print(f'    "{_format_content(node)}"')
+        for node in sources:
+            type_color = _type_color(node["type"])
+            line = f"  [dim]▸[/dim] [{type_color}]{node['type']}[/{type_color}]"
+            line += f" [dim]· from {_format_source_ref(node)}[/dim]"
+            branch = _format_branch(node)
+            if branch:
+                line += f" [dim]· branch: {branch}[/dim]"
+            console.print(line)
+            console.print(f"    {_format_content(node)}")
             console.print()
 
     if args.branch is not None:

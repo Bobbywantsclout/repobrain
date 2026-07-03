@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from datetime import datetime, timezone
 
 import cognee
@@ -9,7 +10,12 @@ from cognee.modules.retrieval.graph_completion_retriever import GraphCompletionR
 from cognee.tasks.storage.add_data_points import add_data_points
 
 from backend.config import GEMINI_API_KEY, GITHUB_TOKEN
-from backend.extraction import ExtractionResult, extract_from_commits, extract_from_prs
+from backend.extraction import (
+    ExtractionResult,
+    extract_from_commits,
+    extract_from_prs,
+)
+from backend.extraction import _model as _gemini_model
 from backend.ingestion import GitHubIngestor
 from backend.schemas import (
     ChatSession,
@@ -524,3 +530,173 @@ async def get_divergent_branches(query: str, target_branch: str, top_k: int = 5)
 
     branches.discard(target_branch)
     return sorted(branches)
+
+
+# Node types that carry memory-worthy semantic content (as opposed to structural
+# nodes like Commit/PullRequest/CodeFile/Engineer/ChatSession, which only exist to
+# anchor semantic nodes to their origin).
+SEMANTIC_SOURCE_TYPES = {
+    "Decision",
+    "Deprecation",
+    "Incident",
+    "Convention",
+    "UserInstruction",
+    "Correction",
+}
+
+
+def _extract_semantic_sources(results: list[dict]) -> list[dict]:
+    """Flatten search_memory's triplet results into a deduped list of semantic-type nodes.
+
+    Mirrors the node-extraction pattern used by cli/main.py and mcp_server/repobrain.py,
+    but dedupes by node "id" (reliable now that _summarize_node always sets it from the
+    graph engine's own node id, not the retriever's lossy projection) rather than by
+    (type, headline text). Each result is enriched with "_linked_node"/"_relationship" so
+    callers can determine commit/PR provenance and branch without a second lookup.
+    """
+    seen_ids = set()
+    sources: list[dict] = []
+    for r in results:
+        pairs = [(r.get("source"), r.get("target")), (r.get("target"), r.get("source"))]
+        for node, other in pairs:
+            if not node or node.get("type") not in SEMANTIC_SOURCE_TYPES:
+                continue
+            node_id = node.get("id")
+            if node_id in seen_ids:
+                continue
+            seen_ids.add(node_id)
+            enriched = dict(node)
+            enriched["_linked_node"] = other
+            enriched["_relationship"] = r.get("relationship")
+            sources.append(enriched)
+    return sources
+
+
+def _source_independence_key(node: dict) -> tuple[str, str]:
+    """(type, source_ref) pair used to count independent sources.
+
+    Different types are always independent, even with the same source_ref (an
+    Incident and a Decision both drawn from PR #292 are 2 independent signals about
+    that PR). Same type + same source_ref collapses to one — two Decisions pulled
+    from the same PR aren't independent corroboration, they're the same event.
+    """
+    ref = node.get("source_ref")
+    if not ref:
+        refs = node.get("source_refs")
+        ref = refs[0] if refs else node.get("id", "unknown")
+    return (node.get("type", ""), ref)
+
+
+def _source_text(node: dict) -> str:
+    """The primary descriptive text for a semantic node — same field-per-type mapping
+    used by cli/main.py's formatter, duplicated here (not imported) so backend doesn't
+    depend on cli for its own prompt construction and fallback text."""
+    node_type = node.get("type")
+    if node_type == "Incident":
+        return node.get("what_broke", "")
+    if node_type == "Decision":
+        return node.get("content", "")
+    if node_type == "Deprecation":
+        what = node.get("what", "")
+        replaced = node.get("replaced_with")
+        return f"{what} -> {replaced}" if replaced else what
+    if node_type == "Convention":
+        return node.get("rule", "")
+    if node_type == "UserInstruction":
+        return node.get("content", "")
+    if node_type == "Correction":
+        return f"AI suggested '{node.get('ai_suggested', '')}', user said '{node.get('user_said', '')}'"
+    return str(node)
+
+
+def _format_source_for_prompt(node: dict) -> str:
+    """Compact (~200 char) one-line rendering of a source for the Gemini prompt."""
+    node_type = node.get("type", "")
+    _, ref = _source_independence_key(node)
+    line = f"[{node_type}] {_source_text(node)} (source: {ref})"
+    return line[:200]
+
+
+async def _generate_answer_summary(query: str, sources: list[dict]) -> str:
+    """
+    Use Gemini Flash to synthesize a one-sentence answer from the sources.
+    If Gemini fails or quota exhausted, fall back to the top source's label.
+    """
+    formatted_sources = "\n".join(f"- {_format_source_for_prompt(s)}" for s in sources)
+    prompt = (
+        f'A developer asked: "{query}"\n\n'
+        "Based on these memory nodes from their team's codebase history:\n"
+        f"{formatted_sources}\n\n"
+        "Write ONE sentence that directly answers the question. Be specific — mention "
+        "file names, PR numbers, or key technical terms if they appear in the sources. "
+        "If the sources don't contain a real answer, say so plainly. Do not hedge."
+    )
+
+    try:
+        response = await _gemini_model.generate_content_async(
+            prompt,
+            request_options={"timeout": 8},
+        )
+        text = (response.text or "").strip()
+        if text:
+            return text
+    except Exception as e:
+        print(
+            f"Answer summary generation failed ({type(e).__name__}: {e}). "
+            "Falling back to top source.",
+            file=sys.stderr,
+        )
+
+    return _source_text(sources[0])
+
+
+async def search_memory_with_confidence(
+    query: str,
+    top_k: int = 5,
+    branch: str | None = None,
+) -> dict:
+    """
+    Search memory and compute confidence based on source diversity.
+
+    Returns a dict with:
+      - "answer": str (one-sentence summary generated by Gemini)
+      - "confidence": "HIGH" | "MEDIUM" | "LOW"
+      - "confidence_reason": str (why this confidence level)
+      - "sources": list[dict] (the underlying results, one per source)
+    """
+    results = await search_memory(query, top_k=top_k, branch=branch)
+    sources = _extract_semantic_sources(results)
+
+    if not sources:
+        # search_memory already falls back to a raw LLM completion when no graph
+        # triplets matched (see its own docstring) — reuse that instead of paying
+        # for a second Gemini call here, so the empty case costs 0 extra calls.
+        completions = [r["answer"] for r in results if "answer" in r]
+        answer = completions[0] if completions else "No relevant memories found for this question."
+        return {
+            "answer": answer,
+            "confidence": "LOW",
+            "confidence_reason": "no relevant memories found",
+            "sources": [],
+        }
+
+    independent_count = len({_source_independence_key(s) for s in sources})
+
+    if independent_count >= 3:
+        confidence = "HIGH"
+        confidence_reason = f"{independent_count} independent sources agree"
+    elif independent_count == 2:
+        confidence = "MEDIUM"
+        confidence_reason = "2 independent sources agree"
+    else:
+        confidence = "LOW"
+        confidence_reason = "single source only"
+
+    answer = await _generate_answer_summary(query, sources)
+
+    return {
+        "answer": answer,
+        "confidence": confidence,
+        "confidence_reason": confidence_reason,
+        "sources": sources,
+    }
