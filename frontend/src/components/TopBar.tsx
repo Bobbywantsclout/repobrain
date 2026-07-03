@@ -10,7 +10,7 @@ interface Props {
 export default function TopBar({ data, onForgetClick }: Props) {
   return (
     <div
-      className="fixed top-0 left-0 right-0 z-10 flex items-center justify-between px-6 py-3 border-b"
+      className="fixed top-0 left-0 right-0 z-10 flex items-center justify-between px-8 py-5 border-b"
       style={{
         background: "rgba(10, 15, 25, 0.85)",
         backdropFilter: "blur(12px)",
@@ -19,15 +19,15 @@ export default function TopBar({ data, onForgetClick }: Props) {
       }}
     >
       <div className="flex items-baseline gap-2">
-        <span className="text-sm font-semibold tracking-tight" style={{ color: "var(--text-primary)" }}>
+        <span className="text-lg font-semibold tracking-tight" style={{ color: "var(--text-primary)" }}>
           RepoBrain
         </span>
-        <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
+        <span className="text-sm" style={{ color: "var(--text-secondary)" }}>
           graph explorer
         </span>
       </div>
       {data && (
-        <div className="flex items-center gap-4 text-xs" style={{ color: "var(--text-secondary)" }}>
+        <div className="flex items-center gap-5 text-sm" style={{ color: "var(--text-secondary)" }}>
           <span>{data.meta.total_nodes} nodes</span>
           <span>·</span>
           <span>{data.meta.total_edges} edges</span>

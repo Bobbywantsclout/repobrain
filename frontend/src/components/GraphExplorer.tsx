@@ -290,6 +290,14 @@ export default function GraphExplorer({
         defaultEdgeOptions={{ type: "straight" }}
         proOptions={{ hideAttribution: true }}
         style={{ background: "transparent" }}
+        panOnDrag={false}
+        panOnScroll={false}
+        zoomOnScroll={true}
+        zoomOnPinch={true}
+        zoomOnDoubleClick={true}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={true}
       >
         <Background
           variant={BackgroundVariant.Dots}
