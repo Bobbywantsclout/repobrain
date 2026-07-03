@@ -7,9 +7,10 @@ interface Props {
   isOpen: boolean;
   onClose: () => void;
   onComplete: (removedNodeIds: string[]) => void;
+  onPreviewChange: (previewIds: Set<string>) => void;
 }
 
-export default function ForgetPanel({ isOpen, onClose, onComplete }: Props) {
+export default function ForgetPanel({ isOpen, onClose, onComplete, onPreviewChange }: Props) {
   const [query, setQuery] = useState("");
   const [reason, setReason] = useState("");
   const [preview, setPreview] = useState<ForgetPreviewResponse | null>(null);
@@ -21,6 +22,7 @@ export default function ForgetPanel({ isOpen, onClose, onComplete }: Props) {
   useEffect(() => {
     if (!isOpen || !query.trim()) {
       setPreview(null);
+      onPreviewChange(new Set());
       return;
     }
     const timer = setTimeout(async () => {
@@ -29,16 +31,19 @@ export default function ForgetPanel({ isOpen, onClose, onComplete }: Props) {
       try {
         const result = await previewForget(query);
         setPreview(result);
+        const previewIds = new Set(result.nodes.map((n) => n.id));
+        onPreviewChange(result.count > 0 ? previewIds : new Set());
       } catch (err) {
         setError((err as Error).message);
+        onPreviewChange(new Set());
       } finally {
         setLoading(false);
       }
     }, 400);
     return () => clearTimeout(timer);
-  }, [query, isOpen]);
+  }, [query, isOpen, onPreviewChange]);
 
-  // Reset when opened
+  // Reset when opened, and clear the red preview tint when the panel closes.
   useEffect(() => {
     if (isOpen) {
       setQuery("");
@@ -46,8 +51,10 @@ export default function ForgetPanel({ isOpen, onClose, onComplete }: Props) {
       setPreview(null);
       setConfirming(false);
       setError(null);
+    } else {
+      onPreviewChange(new Set());
     }
-  }, [isOpen]);
+  }, [isOpen, onPreviewChange]);
 
   const handleConfirmForget = async () => {
     if (!query.trim() || !reason.trim()) return;

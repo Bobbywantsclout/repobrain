@@ -27,6 +27,7 @@ interface Props {
   query: string;
   onNodeClick: (node: ApiNode) => void;
   forgetPreviewIds?: Set<string> | null;
+  dissolvingNodeIds?: Set<string> | null;
 }
 
 // React Flow's automatic node measurement relies on ResizeObserver firing at least
@@ -48,7 +49,13 @@ function MeasurementFallback({ nodeIds }: { nodeIds: string[] }) {
   return null;
 }
 
-export default function GraphExplorer({ data, query, onNodeClick, forgetPreviewIds = null }: Props) {
+export default function GraphExplorer({
+  data,
+  query,
+  onNodeClick,
+  forgetPreviewIds = null,
+  dissolvingNodeIds = null,
+}: Props) {
   // Count edges per node id to determine "large" nodes
   const edgeCountById = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -141,6 +148,7 @@ export default function GraphExplorer({ data, query, onNodeClick, forgetPreviewI
           isQueryMatch: false,
           isLabelVisible: false,
           isForgetTarget: false,
+          isDissolving: false,
           sizeBase: sizes.base,
           sizeLarge: sizes.large,
         },
@@ -182,6 +190,7 @@ export default function GraphExplorer({ data, query, onNodeClick, forgetPreviewI
         const isMatch = matchingIds !== null && matchingIds.has(node.id);
         const queryDimmed = matchingIds !== null && !isMatch;
         const isForgetTarget = forgetPreviewIds !== null && forgetPreviewIds.has(node.id);
+        const isDissolving = dissolvingNodeIds !== null && dissolvingNodeIds.has(node.id);
 
         if (!hoveredId) {
           return {
@@ -193,6 +202,7 @@ export default function GraphExplorer({ data, query, onNodeClick, forgetPreviewI
               isDimmed: queryDimmed,
               isLabelVisible: isMatch,
               isForgetTarget,
+              isDissolving,
             },
           };
         }
@@ -208,28 +218,43 @@ export default function GraphExplorer({ data, query, onNodeClick, forgetPreviewI
             isDimmed: queryDimmed || hoverDimmed,
             isLabelVisible: isHovered || isNeighbor,
             isForgetTarget,
+            isDissolving,
           },
         };
       })
     );
-  }, [hoveredId, neighborsById, matchingIds, forgetPreviewIds, setNodes]);
+  }, [hoveredId, neighborsById, matchingIds, forgetPreviewIds, dissolvingNodeIds, setNodes]);
 
   // Update edge styling based on the active query — edges between two matching
   // nodes get subtly brighter, edges touching a non-matching node dim to 15%.
+  // Edges touching a dissolving node fade to 0 first, ahead of their node (see
+  // GraphNode's isDissolving transition), so the connection visibly lets go
+  // before the node itself disappears.
   useEffect(() => {
     setEdges((prev) =>
       prev.map((edge) => {
-        if (matchingIds === null) {
-          return { ...edge, style: { ...edge.style, opacity: 0.5 } };
-        }
-        const bothMatch = matchingIds.has(edge.source) && matchingIds.has(edge.target);
+        const isEdgeDissolving =
+          dissolvingNodeIds !== null &&
+          (dissolvingNodeIds.has(edge.source as string) || dissolvingNodeIds.has(edge.target as string));
+
+        const baseOpacity =
+          matchingIds === null
+            ? 0.5
+            : matchingIds.has(edge.source) && matchingIds.has(edge.target)
+            ? 0.9
+            : DIMMED_OPACITY;
+
         return {
           ...edge,
-          style: { ...edge.style, opacity: bothMatch ? 0.9 : DIMMED_OPACITY },
+          style: {
+            ...edge.style,
+            opacity: isEdgeDissolving ? 0 : baseOpacity,
+            transition: "opacity 600ms ease-out",
+          },
         };
       })
     );
-  }, [matchingIds, setEdges]);
+  }, [matchingIds, dissolvingNodeIds, setEdges]);
 
   const handleNodeMouseEnter: NodeMouseHandler = useCallback((_, node) => {
     setHoveredId(node.id);

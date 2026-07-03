@@ -16,6 +16,7 @@ export interface GraphNodeData {
   isQueryMatch: boolean;
   isLabelVisible: boolean;
   isForgetTarget: boolean;
+  isDissolving: boolean;
   sizeBase?: number;
   sizeLarge?: number;
 }
@@ -29,10 +30,13 @@ export default function GraphNode({ data }: NodeProps<GraphNodeData>) {
 
   return (
     <div
-      className="relative transition-opacity flex items-center justify-center"
+      className="relative flex items-center justify-center"
       style={{
-        opacity: data.isDimmed ? DIMMED_OPACITY : 1,
-        transitionDuration: "150ms",
+        opacity: data.isDissolving ? 0 : data.isDimmed ? DIMMED_OPACITY : 1,
+        transform: data.isDissolving ? "scale(1.5)" : "scale(1)",
+        transition: data.isDissolving
+          ? "opacity 800ms ease-out, transform 800ms ease-out"
+          : "opacity 150ms, transform 150ms",
       }}
     >
       {/* Invisible edge-connection handles — required by React Flow */}

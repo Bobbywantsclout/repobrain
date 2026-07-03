@@ -10,16 +10,14 @@ import OnboardingHint from "@/components/OnboardingHint";
 import ForgetPanel from "@/components/ForgetPanel";
 import "reactflow/dist/style.css";
 
-// Phase 5a: no live preview wiring yet — Phase 5b will replace this with the
-// real set of node ids matched by ForgetPanel's debounced preview query.
-const EMPTY_FORGET_PREVIEW_IDS = new Set<string>();
-
 export default function Home() {
   const [data, setData] = useState<GraphResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [forgetMode, setForgetMode] = useState(false);
+  const [forgetPreviewIds, setForgetPreviewIds] = useState<Set<string>>(new Set());
+  const [dissolvingNodeIds, setDissolvingNodeIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchGraph()
@@ -43,6 +41,20 @@ export default function Home() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
+
+  const handleForgetComplete = async (removedIds: string[]) => {
+    // Start dissolve animation
+    setDissolvingNodeIds(new Set(removedIds));
+    setForgetPreviewIds(new Set()); // Clear red preview immediately
+
+    // Wait for dissolve animation to complete (~1000ms including edge fade)
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    // Refetch graph (nodes are now gone from backend)
+    const fresh = await fetchGraph();
+    setData(fresh);
+    setDissolvingNodeIds(new Set());
+  };
 
   return (
     <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
@@ -80,7 +92,8 @@ export default function Home() {
             data={data}
             query={query}
             onNodeClick={setSelectedNode}
-            forgetPreviewIds={EMPTY_FORGET_PREVIEW_IDS}
+            forgetPreviewIds={forgetPreviewIds}
+            dissolvingNodeIds={dissolvingNodeIds}
           />
           <QueryBar value={query} onChange={setQuery} />
           <OnboardingHint />
@@ -90,12 +103,12 @@ export default function Home() {
           />
           <ForgetPanel
             isOpen={forgetMode}
-            onClose={() => setForgetMode(false)}
-            onComplete={() => {
-              // Phase 5a: just refetch the graph
-              // Phase 5b: will add dissolve animation before refetch
-              fetchGraph().then(setData);
+            onClose={() => {
+              setForgetMode(false);
+              setForgetPreviewIds(new Set());
             }}
+            onComplete={handleForgetComplete}
+            onPreviewChange={setForgetPreviewIds}
           />
         </>
       )}
