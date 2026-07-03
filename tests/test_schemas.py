@@ -13,6 +13,7 @@ from backend.schemas import (
     Decision,
     Deprecation,
     Engineer,
+    ForgetEvent,
     Incident,
     PullRequest,
     UserInstruction,
@@ -130,6 +131,18 @@ def main():
     print(correction)
     assert correction.source_session is chat_session
     assert correction.ai_suggested.startswith("Use cognee.add()")
+
+    forget_event = ForgetEvent(
+        query="Redis",
+        reason="Redis was removed six months ago, LRU is now standard.",
+        forgotten_at=datetime(2026, 7, 3, 9, 0),
+        removed_node_ids=[str(decision.id), str(deprecation.id)],
+        removed_types=["Decision", "Deprecation"],
+        removed_count=2,
+    )
+    print(forget_event)
+    assert forget_event.removed_count == 2
+    assert forget_event.removed_types == ["Decision", "Deprecation"]
 
 
 if __name__ == "__main__":

@@ -145,6 +145,22 @@ class Correction(DataPoint):
     metadata: dict = {"index_fields": ["user_said"], "identity_fields": ["user_said", "given_at"]}
 
 
+class ForgetEvent(DataPoint):
+    """A record of memories deliberately removed from the graph."""
+
+    query: str  # what the user searched for
+    reason: str  # why they chose to forget
+    forgotten_at: datetime
+    removed_node_ids: list[str]  # UUIDs of removed nodes
+    removed_types: list[str]  # e.g. ["Decision", "Deprecation"]
+    removed_count: int  # convenience field
+
+    metadata: dict = {
+        "index_fields": ["query", "reason"],
+        "identity_fields": ["query", "forgotten_at"],
+    }
+
+
 # Decision/Deprecation/Incident/Convention reference Commit and PullRequest via forward
 # (string) type annotations so the schema reads top-to-bottom without needing the four
 # semantic classes reordered above the two structural ones. Pydantic v2 requires an
@@ -158,3 +174,5 @@ Convention.model_rebuild()
 ChatSession.model_rebuild()
 UserInstruction.model_rebuild()
 Correction.model_rebuild()
+
+ForgetEvent.model_rebuild()

@@ -26,6 +26,7 @@ from backend.schemas import (
     Decision,
     Deprecation,
     Engineer,
+    ForgetEvent,
     Incident,
     PullRequest,
     UserInstruction,
@@ -699,4 +700,88 @@ async def search_memory_with_confidence(
         "confidence": confidence,
         "confidence_reason": confidence_reason,
         "sources": sources,
+    }
+
+
+async def preview_forget(query: str, top_k: int = 20) -> list[dict]:
+    """
+    Preview what would be forgotten if this query were executed.
+    Returns a list of node dicts matching the query, without deleting anything.
+    Similar to search_memory but with a higher top_k (users may want to forget many nodes at once).
+    Excludes ForgetEvent nodes from the results (we don't forget the forget log).
+
+    Unlike _extract_semantic_sources, this is not limited to SEMANTIC_SOURCE_TYPES —
+    forgetting should be able to target structural nodes too (a Commit, an Engineer who
+    left, a CodeFile that was deleted), not just Decision/Incident/etc.
+    """
+    results = await search_memory(query, top_k=top_k)
+
+    seen_ids = set()
+    nodes: list[dict] = []
+    for r in results:
+        for side in ("source", "target"):
+            node = r.get(side)
+            if not node or node.get("type") == "ForgetEvent":
+                continue
+            node_id = node.get("id")
+            if not node_id or node_id in seen_ids:
+                continue
+            seen_ids.add(node_id)
+            nodes.append(node)
+    return nodes
+
+
+async def forget_memories(query: str, reason: str, top_k: int = 20) -> dict:
+    """
+    Delete memories matching the query from Cognee's graph, then create a
+    ForgetEvent recording what and why.
+
+    Returns:
+      {
+        "removed_node_ids": [uuid, ...],
+        "removed_types": ["Decision", "Deprecation", ...],  # unique types
+        "removed_count": int,
+        "forget_event_id": uuid,
+      }
+    """
+    await _ensure_cognee_setup()
+
+    nodes = await preview_forget(query, top_k=top_k)
+    graph_engine = await get_graph_engine()
+
+    removed_node_ids: list[str] = []
+    removed_types: list[str] = []
+    for node in nodes:
+        node_id = node.get("id")
+        try:
+            # DETACH DELETE (see the Ladybug adapter's delete_node) removes the node's
+            # relationships along with it — no separate edge-deletion pass needed.
+            await graph_engine.delete_node(node_id)
+        except Exception as e:
+            print(
+                f"Failed to delete node {node_id} ({node.get('type')}): "
+                f"{type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
+            continue
+        removed_node_ids.append(node_id)
+        removed_types.append(node.get("type", "Unknown"))
+
+    unique_types = sorted(set(removed_types))
+
+    forget_event = ForgetEvent(
+        query=query,
+        reason=reason,
+        forgotten_at=datetime.now(timezone.utc),
+        removed_node_ids=removed_node_ids,
+        removed_types=unique_types,
+        removed_count=len(removed_node_ids),
+    )
+    await add_data_points([forget_event])
+
+    return {
+        "removed_node_ids": removed_node_ids,
+        "removed_types": unique_types,
+        "removed_count": len(removed_node_ids),
+        "forget_event_id": str(forget_event.id),
     }

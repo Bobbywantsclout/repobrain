@@ -38,3 +38,35 @@ export async function fetchGraph(): Promise<GraphResponse> {
   }
   return res.json();
 }
+
+export interface ForgetPreviewResponse {
+  nodes: GraphNode[];
+  count: number;
+}
+
+export interface ForgetResponse {
+  removed_node_ids: string[];
+  removed_types: string[];
+  removed_count: number;
+  forget_event_id: string;
+}
+
+export async function previewForget(query: string, topK: number = 20): Promise<ForgetPreviewResponse> {
+  const res = await fetch(`${API_BASE}/api/forget/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, top_k: topK }),
+  });
+  if (!res.ok) throw new Error(`Preview failed: ${res.status}`);
+  return res.json();
+}
+
+export async function executeForget(query: string, reason: string, topK: number = 20): Promise<ForgetResponse> {
+  const res = await fetch(`${API_BASE}/api/forget`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, reason, top_k: topK }),
+  });
+  if (!res.ok) throw new Error(`Forget failed: ${res.status}`);
+  return res.json();
+}

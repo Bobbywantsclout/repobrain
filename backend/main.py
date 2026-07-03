@@ -2,10 +2,11 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from cognee.infrastructure.databases.graph import get_graph_engine
 
-from backend.memory import _ensure_cognee_setup
+from backend.memory import _ensure_cognee_setup, forget_memories, preview_forget
 
 app = FastAPI(title="RepoBrain")
 
@@ -129,3 +130,28 @@ async def get_graph():
             "branches": sorted(branches_seen),
         },
     }
+
+
+class ForgetPreviewRequest(BaseModel):
+    query: str
+    top_k: int = 20
+
+
+class ForgetRequest(BaseModel):
+    query: str
+    reason: str
+    top_k: int = 20
+
+
+@app.post("/api/forget/preview")
+async def preview_forget_endpoint(req: ForgetPreviewRequest):
+    await _ensure_cognee_setup()
+    nodes = await preview_forget(req.query, top_k=req.top_k)
+    return {"nodes": nodes, "count": len(nodes)}
+
+
+@app.post("/api/forget")
+async def forget_endpoint(req: ForgetRequest):
+    await _ensure_cognee_setup()
+    result = await forget_memories(req.query, req.reason, top_k=req.top_k)
+    return result

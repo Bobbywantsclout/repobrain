@@ -26,6 +26,7 @@ interface Props {
   data: GraphResponse;
   query: string;
   onNodeClick: (node: ApiNode) => void;
+  forgetPreviewIds?: Set<string> | null;
 }
 
 // React Flow's automatic node measurement relies on ResizeObserver firing at least
@@ -47,7 +48,7 @@ function MeasurementFallback({ nodeIds }: { nodeIds: string[] }) {
   return null;
 }
 
-export default function GraphExplorer({ data, query, onNodeClick }: Props) {
+export default function GraphExplorer({ data, query, onNodeClick, forgetPreviewIds = null }: Props) {
   // Count edges per node id to determine "large" nodes
   const edgeCountById = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -139,6 +140,7 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
           isHighlighted: false,
           isQueryMatch: false,
           isLabelVisible: false,
+          isForgetTarget: false,
           sizeBase: sizes.base,
           sizeLarge: sizes.large,
         },
@@ -179,6 +181,7 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
       prev.map((node) => {
         const isMatch = matchingIds !== null && matchingIds.has(node.id);
         const queryDimmed = matchingIds !== null && !isMatch;
+        const isForgetTarget = forgetPreviewIds !== null && forgetPreviewIds.has(node.id);
 
         if (!hoveredId) {
           return {
@@ -189,6 +192,7 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
               isQueryMatch: isMatch,
               isDimmed: queryDimmed,
               isLabelVisible: isMatch,
+              isForgetTarget,
             },
           };
         }
@@ -203,11 +207,12 @@ export default function GraphExplorer({ data, query, onNodeClick }: Props) {
             isQueryMatch: isMatch,
             isDimmed: queryDimmed || hoverDimmed,
             isLabelVisible: isHovered || isNeighbor,
+            isForgetTarget,
           },
         };
       })
     );
-  }, [hoveredId, neighborsById, matchingIds, setNodes]);
+  }, [hoveredId, neighborsById, matchingIds, forgetPreviewIds, setNodes]);
 
   // Update edge styling based on the active query — edges between two matching
   // nodes get subtly brighter, edges touching a non-matching node dim to 15%.

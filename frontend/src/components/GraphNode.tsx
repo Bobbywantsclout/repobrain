@@ -4,6 +4,8 @@ import { Handle, Position, NodeProps } from "reactflow";
 import { NODE_COLORS, NODE_SIZE_BASE, NODE_SIZE_LARGE, DIMMED_OPACITY, hasBranchContext } from "@/lib/design";
 import type { NodeType } from "@/lib/api";
 
+const FORGET_RED = "hsl(0, 84%, 60%)";
+
 export interface GraphNodeData {
   type: NodeType;
   label: string;
@@ -13,6 +15,7 @@ export interface GraphNodeData {
   isHighlighted: boolean;
   isQueryMatch: boolean;
   isLabelVisible: boolean;
+  isForgetTarget: boolean;
   sizeBase?: number;
   sizeLarge?: number;
 }
@@ -43,8 +46,14 @@ export default function GraphNode({ data }: NodeProps<GraphNodeData>) {
           width: size,
           height: size,
           backgroundColor: color,
-          border: showBranch ? "2px solid rgba(255, 255, 255, 0.7)" : "none",
-          boxShadow: data.isHighlighted
+          border: data.isForgetTarget
+            ? `3px solid ${FORGET_RED}`
+            : showBranch
+            ? "2px solid rgba(255, 255, 255, 0.7)"
+            : "none",
+          boxShadow: data.isForgetTarget
+            ? `0 0 20px ${FORGET_RED}`
+            : data.isHighlighted
             ? `0 0 20px ${color}, 0 0 40px ${color}`
             : data.isQueryMatch
             ? `0 0 10px ${color}`

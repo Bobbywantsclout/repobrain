@@ -4,9 +4,10 @@ import type { GraphResponse } from "@/lib/api";
 
 interface Props {
   data: GraphResponse | null;
+  onForgetClick: () => void;
 }
 
-export default function TopBar({ data }: Props) {
+export default function TopBar({ data, onForgetClick }: Props) {
   return (
     <div
       className="fixed top-0 left-0 right-0 z-10 flex items-center justify-between px-6 py-3 border-b"
@@ -32,6 +33,14 @@ export default function TopBar({ data }: Props) {
           <span>{data.meta.total_edges} edges</span>
           <span>·</span>
           <span>{formatBranches(data.meta.branches)}</span>
+          <button
+            onClick={onForgetClick}
+            className="text-xs opacity-50 hover:opacity-100 transition-opacity ml-4"
+            style={{ color: "var(--text-secondary)" }}
+            title="Forget memories (F)"
+          >
+            forget
+          </button>
         </div>
       )}
     </div>
