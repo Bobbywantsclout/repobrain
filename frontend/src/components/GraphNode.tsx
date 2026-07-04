@@ -1,7 +1,7 @@
 "use client";
 
 import { Handle, Position, NodeProps } from "reactflow";
-import { NODE_COLORS, NODE_SIZE_BASE, NODE_SIZE_LARGE, DIMMED_OPACITY, hasBranchContext } from "@/lib/design";
+import { NODE_COLORS, DIMMED_OPACITY, hasBranchContext } from "@/lib/design";
 import type { NodeType } from "@/lib/api";
 
 const FORGET_RED = "hsl(0, 84%, 60%)";
@@ -10,29 +10,45 @@ export interface GraphNodeData {
   type: NodeType;
   label: string;
   branch: string;
-  isLarge: boolean;
   isDimmed: boolean;
   isHighlighted: boolean;
   isQueryMatch: boolean;
   isLabelVisible: boolean;
   isForgetTarget: boolean;
   isDissolving: boolean;
-  sizeBase?: number;
-  sizeLarge?: number;
+  // True for nodes with no graph edges at all (most Commits/CodeFiles/Engineers —
+  // only semantic nodes carry a source_commit/source_pr edge). Dimmer by default so
+  // the connected "signal" nodes read as foreground content and these read as quiet
+  // background texture — full opacity on hover, same as any node.
+  isBackground: boolean;
+  // Rendered diameter — computed once by GraphExplorer via design.ts's getNodeSize
+  // (the single source of truth also consumed by layout.ts's collision force), so
+  // React Flow's declared width/height (its hit-area) always matches the visual
+  // circle exactly.
+  size: number;
 }
 
+// Default opacity for background nodes when nothing else (dim/highlight/dissolve) applies.
+const BACKGROUND_OPACITY = 0.35;
+
 export default function GraphNode({ data }: NodeProps<GraphNodeData>) {
-  const size = data.isLarge
-    ? data.sizeLarge ?? NODE_SIZE_LARGE
-    : data.sizeBase ?? NODE_SIZE_BASE;
+  const size = data.size;
   const color = NODE_COLORS[data.type] || NODE_COLORS.Unknown;
   const showBranch = hasBranchContext(data.branch);
+
+  const baseOpacity = data.isBackground ? BACKGROUND_OPACITY : 1;
 
   return (
     <div
       className="relative flex items-center justify-center"
       style={{
-        opacity: data.isDissolving ? 0 : data.isDimmed ? DIMMED_OPACITY : 1,
+        opacity: data.isDissolving
+          ? 0
+          : data.isDimmed
+          ? DIMMED_OPACITY
+          : data.isHighlighted
+          ? 1
+          : baseOpacity,
         transform: data.isDissolving ? "scale(1.5)" : "scale(1)",
         transition: data.isDissolving
           ? "opacity 800ms ease-out, transform 800ms ease-out"

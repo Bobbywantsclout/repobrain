@@ -1,5 +1,6 @@
-import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceX, forceY } from "d3-force";
+import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, forceRadial } from "d3-force";
 import type { GraphNode as ApiNode, GraphEdge as ApiEdge } from "./api";
+import { getNodeSize } from "./design";
 
 export interface LayoutedNode {
   id: string;
@@ -15,6 +16,8 @@ interface SimNode {
   fx?: number | null;
   fy?: number | null;
   isConnected: boolean;
+  radialTarget: number;
+  size: number;
 }
 
 interface SimLink {
@@ -24,40 +27,55 @@ interface SimLink {
 
 /**
  * Compute a force-directed layout using d3-force.
- * - Connected nodes attract each other via edge springs
- * - All nodes repel each other via many-body force
- * - Collision force prevents overlaps
- * - Weak center gravity keeps things from drifting off-screen
- * - Isolated nodes are gently pulled toward the outer edges
- *   (via forceX/forceY biased outward) so they don't overwhelm the center
+ * - Connected nodes attract each other via edge springs and repel/collide normally,
+ *   forming a compact, legible cluster near the center — the "signal."
+ * - Isolated nodes (no edges — most Commits/CodeFiles/Engineers, since only
+ *   Decision/Deprecation/Incident/Convention carry a source_commit/source_pr edge)
+ *   repel each other weakly and settle onto a soft, radius-varied ring around the
+ *   connected cluster via forceRadial — a diffuse background field rather than
+ *   foreground content. Each isolated node targets its own radius (550-800px,
+ *   derived from a per-node seed) rather than one shared radius, so they don't
+ *   read as an artificial perfect circle.
+ *
+ *   This replaces an earlier version that pulled isolated nodes toward one of 4
+ *   fixed quadrant anchor points (±480, ±300) — that produced 4-5 tight, visually
+ *   meaningless circular clusters (confirmed via screenshot) since dozens of edgeless
+ *   nodes were all converging on the same few anchor coordinates.
  *
  * Simulation runs for a fixed number of ticks (headless), then we take the
  * final positions. This produces a "settled" graph — no live jitter, no
  * ongoing motion after mount.
  */
-export function computeLayout(nodes: ApiNode[], edges: ApiEdge[], maxNodeSize: number = 60): LayoutedNode[] {
+export function computeLayout(nodes: ApiNode[], edges: ApiEdge[]): LayoutedNode[] {
   const connectedIds = new Set<string>();
   for (const edge of edges) {
     connectedIds.add(edge.source);
     connectedIds.add(edge.target);
   }
 
+  const totalNodes = nodes.length;
+
   // Initialize with deterministic starting positions so the simulation
   // converges consistently across runs
-  const simNodes: SimNode[] = nodes.map((n, i) => {
+  const simNodes: SimNode[] = nodes.map((n) => {
     const isConnected = connectedIds.has(n.id);
     const seed = deterministicSeed(n.id);
+    const radius = 550 + seed.y * 250;
     return {
       id: n.id,
       type: n.type,
-      // Connected nodes start near center; isolated nodes start on the periphery
-      x: isConnected
-        ? (seed.x - 0.5) * 100
-        : Math.cos(seed.x * Math.PI * 2) * 400,
-      y: isConnected
-        ? (seed.y - 0.5) * 100
-        : Math.sin(seed.y * Math.PI * 2) * 400,
+      // Connected nodes start near center; isolated nodes start scattered on a
+      // radius-varied ring (not a single fixed radius) so the initial layout
+      // already reads as diffuse rather than a crisp circle.
+      x: isConnected ? (seed.x - 0.5) * 100 : Math.cos(seed.x * Math.PI * 2) * radius,
+      y: isConnected ? (seed.y - 0.5) * 100 : Math.sin(seed.x * Math.PI * 2) * radius,
       isConnected,
+      radialTarget: radius,
+      // Same getNodeSize() the canvas renders with (see design.ts) — collision
+      // radius below derives from this per node, so a semantic node's larger
+      // true size is exactly what keeps its neighbors from overlapping it,
+      // instead of a flat guess that drifts out of sync with actual rendering.
+      size: getNodeSize(n.type, totalNodes, !isConnected),
     };
   });
 
@@ -75,21 +93,25 @@ export function computeLayout(nodes: ApiNode[], edges: ApiEdge[], maxNodeSize: n
         .distance(140)
         .strength(0.7)
     )
-    .force("charge", forceManyBody().strength(-320))
+    // Isolated nodes repel each other much more weakly than connected ones — they're
+    // background texture, not content competing for space.
+    .force("charge", forceManyBody().strength((d: any) => (d.isConnected ? -320 : -50)))
     .force("center", forceCenter(0, 0).strength(0.05))
-    .force("collide", forceCollide().radius(maxNodeSize * 0.9).strength(0.9))
-    // Push isolated nodes toward the periphery
+    // Radius derived from each node's own true rendered size (half its diameter,
+    // plus a little breathing room) rather than one shared guess — so bumping a
+    // semantic node's size in design.ts can never make it overlap its neighbors.
     .force(
-      "x-isolated",
-      forceX((d: any) => (d.isConnected ? 0 : d.x > 0 ? 480 : -480)).strength(
-        (d: any) => (d.isConnected ? 0 : 0.08)
-      )
+      "collide",
+      forceCollide()
+        .radius((d: any) => d.size / 2 + 4)
+        .strength(0.9)
     )
+    // Each isolated node settles at its own per-node radius (from radialTarget) rather
+    // than a single shared one, keeping the background field soft and uneven instead
+    // of a crisp ring.
     .force(
-      "y-isolated",
-      forceY((d: any) => (d.isConnected ? 0 : d.y > 0 ? 300 : -300)).strength(
-        (d: any) => (d.isConnected ? 0 : 0.08)
-      )
+      "radial-isolated",
+      forceRadial((d: any) => d.radialTarget, 0, 0).strength((d: any) => (d.isConnected ? 0 : 0.06))
     )
     .stop();
 

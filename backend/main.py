@@ -1,12 +1,19 @@
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from cognee.infrastructure.databases.graph import get_graph_engine
 
-from backend.memory import _ensure_cognee_setup, forget_memories, preview_forget
+from backend.config import parse_github_repo
+from backend.memory import (
+    _ensure_cognee_setup,
+    forget_memories,
+    ingest_repo_into_memory,
+    preview_forget,
+    search_memory_with_confidence,
+)
 
 app = FastAPI(title="RepoBrain")
 
@@ -54,6 +61,8 @@ def _compute_label(node_type: str, attrs: dict) -> str:
         return _truncate(attrs.get("content", ""), 60)
     if node_type == "Correction":
         return _truncate(attrs.get("user_said", ""), 60)
+    if node_type == "ForgetEvent":
+        return _truncate(attrs.get("reason") or attrs.get("query") or "", 60)
     return node_type
 
 
@@ -130,6 +139,44 @@ async def get_graph():
             "branches": sorted(branches_seen),
         },
     }
+
+
+class IngestRequest(BaseModel):
+    repo: str
+    branches: list[str] | None = None
+    commits: int = 20
+    prs: int = 10
+
+
+@app.post("/api/ingest")
+async def ingest_endpoint(req: IngestRequest):
+    await _ensure_cognee_setup()
+    try:
+        repo = parse_github_repo(req.repo)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        counts = await ingest_repo_into_memory(
+            repo, branches=req.branches, commit_limit=req.commits, pr_limit=req.prs
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+
+    return counts
+
+
+class AskRequest(BaseModel):
+    query: str
+    top_k: int = 5
+    branch: str | None = None
+
+
+@app.post("/api/ask")
+async def ask_endpoint(req: AskRequest):
+    await _ensure_cognee_setup()
+    result = await search_memory_with_confidence(req.query, top_k=req.top_k, branch=req.branch)
+    return result
 
 
 class ForgetPreviewRequest(BaseModel):

@@ -33,51 +33,61 @@ export default function QueryBar({ value, onChange }: Props) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onChange]);
 
+  // No longer self-positioned — this now renders inline as part of TopBar's single
+  // header row (see page.tsx/TopBar.tsx), which guarantees it can never overlap the
+  // canvas below: it occupies real document-flow space in the fixed header instead
+  // of floating over the graph at a guessed viewport-relative offset. Compact,
+  // fixed width so it reads as one control among several in the row, not a
+  // dominant search-engine-style bar.
   return (
     <div
-      className="fixed top-1/2 left-1/2 z-10 pointer-events-none"
+      className="flex items-center gap-2 px-3.5 py-1.5 rounded-full border shrink-0"
       style={{
-        transform: "translate(-50%, calc(-50% - 40vh))", // just below top bar
+        background: "rgba(15, 22, 36, 0.85)",
+        borderColor: "var(--panel-border)",
+        width: "260px",
       }}
     >
-      <div
-        className="pointer-events-auto flex items-center gap-3 px-5 py-3 rounded-full border"
-        style={{
-          background: "rgba(15, 22, 36, 0.85)",
-          backdropFilter: "blur(12px)",
-          WebkitBackdropFilter: "blur(12px)",
-          borderColor: "var(--panel-border)",
-          minWidth: "500px",
-          boxShadow: "0 4px 24px rgba(0, 0, 0, 0.3)",
-        }}
+      <span
+        className="text-xs"
+        style={{ color: "var(--text-secondary)" }}
+        aria-hidden="true"
       >
-        <span
-          className="text-xs"
+        ⌕
+      </span>
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Filter nodes..."
+        className="flex-1 min-w-0 bg-transparent outline-none text-sm"
+        style={{ color: "var(--text-primary)" }}
+        aria-label="Query the graph"
+      />
+      {value ? (
+        <button
+          onClick={() => onChange("")}
+          className="text-xs opacity-60 hover:opacity-100 transition-opacity shrink-0"
           style={{ color: "var(--text-secondary)" }}
+          aria-label="Clear query"
+        >
+          clear
+        </button>
+      ) : (
+        <kbd
+          className="text-[10px] shrink-0"
+          style={{
+            color: "var(--text-secondary)",
+            background: "var(--panel-bg)",
+            border: "1px solid var(--panel-border)",
+            borderRadius: "4px",
+            padding: "1px 5px",
+          }}
           aria-hidden="true"
         >
-          ⌕
-        </span>
-        <input
-          ref={inputRef}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="What are you working on?"
-          className="flex-1 bg-transparent outline-none text-base"
-          style={{ color: "var(--text-primary)" }}
-          aria-label="Query the graph"
-        />
-        {value && (
-          <button
-            onClick={() => onChange("")}
-            className="text-xs opacity-60 hover:opacity-100 transition-opacity"
-            style={{ color: "var(--text-secondary)" }}
-            aria-label="Clear query"
-          >
-            clear
-          </button>
-        )}
-      </div>
+          /
+        </kbd>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 export type NodeType =
   | "Decision" | "Deprecation" | "Incident" | "Convention"
   | "Commit" | "PullRequest" | "CodeFile" | "Engineer"
-  | "ChatSession" | "UserInstruction" | "Correction"
+  | "ChatSession" | "UserInstruction" | "Correction" | "ForgetEvent"
   | "Unknown";
 
 export interface GraphNode {
@@ -68,5 +68,65 @@ export async function executeForget(query: string, reason: string, topK: number 
     body: JSON.stringify({ query, reason, top_k: topK }),
   });
   if (!res.ok) throw new Error(`Forget failed: ${res.status}`);
+  return res.json();
+}
+
+export interface IngestResponse {
+  commits: number;
+  prs: number;
+  files: number;
+  decisions: number;
+  deprecations: number;
+  incidents: number;
+  conventions: number;
+  branches_ingested: string[];
+  commits_per_branch: Record<string, number>;
+  prs_per_branch: Record<string, number>;
+  total_datapoints: number;
+}
+
+export async function ingestRepo(
+  repo: string,
+  branches: string[] | null = null,
+  commits: number = 20,
+  prs: number = 10
+): Promise<IngestResponse> {
+  const res = await fetch(`${API_BASE}/api/ingest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo, branches, commits, prs }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.detail || `Ingest failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export interface AskSource {
+  type: NodeType;
+  [key: string]: unknown;
+}
+
+export type Confidence = "HIGH" | "MEDIUM" | "LOW";
+
+export interface AskResponse {
+  answer: string;
+  confidence: Confidence;
+  confidence_reason: string;
+  sources: AskSource[];
+}
+
+export async function askQuestion(
+  query: string,
+  topK: number = 5,
+  branch: string | null = null
+): Promise<AskResponse> {
+  const res = await fetch(`${API_BASE}/api/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, top_k: topK, branch }),
+  });
+  if (!res.ok) throw new Error(`Ask failed: ${res.status}`);
   return res.json();
 }

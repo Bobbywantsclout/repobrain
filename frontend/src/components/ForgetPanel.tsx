@@ -2,15 +2,19 @@
 
 import { useEffect, useState } from "react";
 import { previewForget, executeForget, ForgetPreviewResponse } from "@/lib/api";
+import { HEADER_HEIGHT } from "@/lib/design";
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   onComplete: (removedNodeIds: string[]) => void;
   onPreviewChange: (previewIds: Set<string>) => void;
+  // Pre-fills the query — used when Forget is opened from a specific node's detail
+  // panel rather than the top bar, so that flow goes straight to a relevant preview.
+  initialQuery?: string;
 }
 
-export default function ForgetPanel({ isOpen, onClose, onComplete, onPreviewChange }: Props) {
+export default function ForgetPanel({ isOpen, onClose, onComplete, onPreviewChange, initialQuery = "" }: Props) {
   const [query, setQuery] = useState("");
   const [reason, setReason] = useState("");
   const [preview, setPreview] = useState<ForgetPreviewResponse | null>(null);
@@ -46,7 +50,7 @@ export default function ForgetPanel({ isOpen, onClose, onComplete, onPreviewChan
   // Reset when opened, and clear the red preview tint when the panel closes.
   useEffect(() => {
     if (isOpen) {
-      setQuery("");
+      setQuery(initialQuery);
       setReason("");
       setPreview(null);
       setConfirming(false);
@@ -54,7 +58,7 @@ export default function ForgetPanel({ isOpen, onClose, onComplete, onPreviewChan
     } else {
       onPreviewChange(new Set());
     }
-  }, [isOpen, onPreviewChange]);
+  }, [isOpen, initialQuery, onPreviewChange]);
 
   const handleConfirmForget = async () => {
     if (!query.trim() || !reason.trim()) return;
@@ -74,8 +78,9 @@ export default function ForgetPanel({ isOpen, onClose, onComplete, onPreviewChan
 
   return (
     <div
-      className="fixed top-16 left-1/2 z-20 flex flex-col"
+      className="fixed left-1/2 z-20 flex flex-col"
       style={{
+        top: HEADER_HEIGHT + 16,
         transform: "translateX(-50%)",
         width: "480px",
         background: "rgba(15, 22, 36, 0.95)",

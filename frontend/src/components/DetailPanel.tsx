@@ -3,15 +3,30 @@
 import { useEffect, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { GraphNode } from "@/lib/api";
-import { NODE_COLORS } from "@/lib/design";
+import type { GraphNode, GraphEdge } from "@/lib/api";
+import { NODE_COLORS, HEADER_HEIGHT } from "@/lib/design";
 
 interface Props {
   node: GraphNode | null;
   onClose: () => void;
+  isRelatedActive?: boolean;
+  onRelatedClick?: () => void;
+  onForgetClick?: (label: string) => void;
+  edges?: GraphEdge[];
+  nodesById?: Record<string, GraphNode>;
+  onSelectSource?: (node: GraphNode) => void;
 }
 
-export default function DetailPanel({ node, onClose }: Props) {
+export default function DetailPanel({
+  node,
+  onClose,
+  isRelatedActive = false,
+  onRelatedClick,
+  onForgetClick,
+  edges,
+  nodesById,
+  onSelectSource,
+}: Props) {
   // Escape to close
   useEffect(() => {
     if (!node) return;
@@ -26,23 +41,53 @@ export default function DetailPanel({ node, onClose }: Props) {
 
   const color = NODE_COLORS[node.type] || NODE_COLORS.Unknown;
 
+  // The backend truncates node.label to 60 chars for on-canvas display (it has to
+  // fit next to a tiny dot). For the ones extracted from a single long text field,
+  // prefer that field's full value as the panel's title so it isn't shown once
+  // whole (as a "content"-style row) and once cut off (as the title) — the same
+  // sentence, twice, is the bug; showing it once, in full, is the fix.
+  const fullTextKey = FULL_TEXT_FIELD[node.type];
+  const fullText = fullTextKey ? (node.attributes[fullTextKey] as string | undefined) : undefined;
+  const displayTitle = fullText && fullText.trim() ? fullText : node.label;
+
   // Group attributes into "core" and "metadata"
   const redundant = getRedundantFields(node.type);
   const coreFields = pickCoreFields(node)
     .filter(([k]) => !redundant.has(k))
-    .filter(([, val]) => !isEmptyValue(val));
+    .filter(([, val]) => !isEmptyValue(val))
+    .filter(([k]) => !SOURCE_KEYS.has(k));
   const metadataFields = Object.entries(node.attributes).filter(
     ([k, val]) =>
       !coreFields.some(([ck]) => ck === k) &&
       !redundant.has(k) &&
       !isNoiseField(k) &&
-      !isEmptyValue(val)
+      !isEmptyValue(val) &&
+      !SOURCE_KEYS.has(k)
   );
+
+  // FROM / SOURCE TYPE used to render as two separate rows ("288" / "pr"). Merged
+  // into one "Source · PR #288" row, and — when the provenance edge resolves to an
+  // actual node in the graph — clickable, so provenance (the whole pitch) is
+  // something a viewer can click through, not just read.
+  const sourceType = node.attributes["source_type"] as string | undefined;
+  const sourceRef = node.attributes["source_ref"] as string | undefined;
+  const sourceEdge = edges?.find(
+    (e) => e.source === node.id && (e.relationship === "source_pr" || e.relationship === "source_commit")
+  );
+  const sourceApiNode = sourceEdge && nodesById ? nodesById[sourceEdge.target] : undefined;
+  const sourceLabel =
+    sourceType === "pr" && sourceRef
+      ? `PR #${sourceRef}`
+      : sourceType === "commit" && sourceRef
+      ? `Commit ${sourceRef.slice(0, 10)}`
+      : undefined;
 
   return (
     <div
-      className="fixed top-0 right-0 h-full z-20 flex flex-col border-l"
+      className="fixed right-0 z-20 flex flex-col border-l"
       style={{
+        top: HEADER_HEIGHT,
+        height: `calc(100vh - ${HEADER_HEIGHT}px)`,
         width: "380px",
         background: "rgba(15, 22, 36, 0.95)",
         backdropFilter: "blur(16px)",
@@ -102,15 +147,41 @@ export default function DetailPanel({ node, onClose }: Props) {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-5 py-4">
-        {/* Label */}
+        {/* Title — full text, wraps as needed (no separate truncated + full pair) */}
         <div className="mb-5">
           <div
             className="text-base leading-snug"
             style={{ color: "var(--text-primary)", fontWeight: 500 }}
           >
-            {node.label}
+            <InlineCode text={displayTitle} />
           </div>
         </div>
+
+        {/* Source — merged from source_type + source_ref, clickable when the
+            provenance edge resolves to an actual node */}
+        {sourceLabel && (
+          <div className="flex gap-4 text-sm mb-3">
+            <div
+              className="min-w-[80px] flex-shrink-0 text-xs uppercase tracking-wider pt-0.5"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              Source
+            </div>
+            <div className="flex-1 break-words leading-relaxed overflow-hidden">
+              {sourceApiNode && onSelectSource ? (
+                <button
+                  onClick={() => onSelectSource(sourceApiNode)}
+                  className="text-left hover:underline"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {sourceLabel}
+                </button>
+              ) : (
+                <span style={{ color: "var(--text-primary)" }}>{sourceLabel}</span>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Core fields */}
         {coreFields.length > 0 && (
@@ -156,11 +227,57 @@ export default function DetailPanel({ node, onClose }: Props) {
           </div>
         )}
       </div>
+
+      {/* Footer actions — a read-only panel is a dead end; these link straight
+          into the graph's two other interactions from the exact node being
+          inspected. */}
+      {(onRelatedClick || onForgetClick) && (
+        <div
+          className="flex items-center gap-2 px-5 py-4 border-t"
+          style={{ borderColor: "var(--panel-border)" }}
+        >
+          {onRelatedClick && (
+            <button
+              onClick={onRelatedClick}
+              className="text-sm font-medium px-3.5 py-1.5 rounded-full border transition-colors hover:bg-white/5"
+              style={{
+                color: isRelatedActive ? "var(--text-primary)" : "var(--text-secondary)",
+                borderColor: "var(--panel-border)",
+                background: isRelatedActive ? "rgba(255, 255, 255, 0.08)" : "transparent",
+              }}
+            >
+              Related
+            </button>
+          )}
+          {onForgetClick && (
+            <button
+              onClick={() => onForgetClick(node.label)}
+              className="text-sm font-medium px-3.5 py-1.5 rounded-full border transition-colors hover:bg-white/5"
+              style={{ color: "hsl(0, 84%, 65%)", borderColor: "hsla(0, 84%, 60%, 0.5)" }}
+            >
+              Forget…
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // Helpers
+
+// Node type → the attribute holding its full, untruncated text. The panel's
+// title prefers this over node.label (see displayTitle above).
+const FULL_TEXT_FIELD: Partial<Record<string, string>> = {
+  Decision: "content",
+  Deprecation: "what",
+  Incident: "what_broke",
+  Convention: "rule",
+  ForgetEvent: "reason",
+};
+
+// Rendered as a single merged "Source" row instead of two generic ones.
+const SOURCE_KEYS = new Set(["source_ref", "source_type"]);
 
 function pickCoreFields(node: GraphNode): [string, unknown][] {
   // Return the fields that carry the primary meaning for each node type
@@ -177,6 +294,7 @@ function pickCoreFields(node: GraphNode): [string, unknown][] {
     ChatSession: ["session_id", "tool", "started_at", "project_context"],
     UserInstruction: ["content", "given_at", "scope"],
     Correction: ["ai_suggested", "user_said", "reason", "given_at"],
+    ForgetEvent: ["reason", "query", "removed_types", "removed_count", "forgotten_at"],
   };
   const keys = coreByType[node.type] || [];
   return keys
@@ -189,15 +307,16 @@ function getRedundantFields(nodeType: string): Set<string> {
   const map: Record<string, string[]> = {
     PullRequest: ["title"],       // title is what generates the label
     Commit: ["message"],           // message is what generates the label
-    Decision: [],                  // content IS shown but only once
-    Deprecation: [],
-    Incident: [],
-    Convention: [],
+    Decision: ["content"],         // content IS the (now full-text) title above
+    Deprecation: ["what"],         // what IS the (now full-text) title above
+    Incident: ["what_broke"],      // what_broke IS the (now full-text) title above
+    Convention: ["rule"],          // rule IS the (now full-text) title above
     CodeFile: ["path"],            // path IS the label
     Engineer: ["name"],            // name IS the label
     ChatSession: [],
     UserInstruction: ["content"],
     Correction: ["user_said"],
+    ForgetEvent: ["reason"],       // reason IS the (now full-text) title above
   };
   return new Set(map[nodeType] || []);
 }
@@ -222,6 +341,7 @@ function isNoiseField(key: string): boolean {
     "source_content_hash", // usually null
     "feedback_weight",   // internal weighting
     "importance_weight", // internal weighting
+    "removed_node_ids",  // raw UUID list — removed_types/removed_count already summarize this
   ]);
   if (HIDE_ALWAYS.has(key)) return true;
   if (key.startsWith("_")) return true;
@@ -240,8 +360,6 @@ function formatFieldName(key: string): string {
     "author_handle": "Author",
     "made_by_handle": "Made by",
     "made_on": "When",
-    "source_ref": "From",
-    "source_type": "Source type",
     "github_handle": "GitHub",
     "reviewer_handles": "Reviewers",
     "files_touched": "Files",
@@ -259,6 +377,9 @@ function formatFieldName(key: string): string {
     "project_context": "Project",
     "ai_suggested": "AI suggested",
     "user_said": "User said",
+    "forgotten_at": "When",
+    "removed_types": "Removed",
+    "removed_count": "Count",
   };
   if (overrides[key]) return overrides[key];
   return key.replace(/_/g, " ").replace(/^(.)/, (m) => m.toUpperCase());
@@ -274,6 +395,18 @@ const MARKDOWN_FIELDS = new Set([
   "why",           // Deprecation
 ]);
 
+// Matches ISO 8601 datetimes like 2026-07-04T08:04:12.784020+00:00 — every
+// timestamp field in this schema (made_on, date, deprecated_on, established_on,
+// given_at, started_at, timestamp, last_modified) comes through in this shape,
+// so detecting the format covers all of them without a per-field list to maintain.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+
+function formatTimestamp(iso: string): string {
+  const date = new Date(iso);
+  if (isNaN(date.getTime())) return iso;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
 function formatFieldValue(val: unknown, key?: string): ReactNode {
   if (val === null || val === undefined) return "—";
   if (typeof val === "boolean") return val ? "yes" : "no";
@@ -281,11 +414,10 @@ function formatFieldValue(val: unknown, key?: string): ReactNode {
   if (typeof val === "object") return JSON.stringify(val, null, 2);
   const str = String(val);
 
+  if (ISO_DATE_RE.test(str)) return formatTimestamp(str);
+
   // Truncate SHAs to first 10 chars (dev convention: short SHAs are usable identifiers)
   if (key === "sha" && str.length > 10) {
-    return <span className="font-mono">{str.slice(0, 10)}</span>;
-  }
-  if (key === "source_ref" && /^[0-9a-f]{7,}$/i.test(str) && str.length > 10) {
     return <span className="font-mono">{str.slice(0, 10)}</span>;
   }
 
@@ -300,5 +432,30 @@ function formatFieldValue(val: unknown, key?: string): ReactNode {
     );
   }
 
-  return truncated;
+  return <InlineCode text={truncated} />;
+}
+
+// Renders backtick-delimited spans (`parse()`) as code chips without pulling in
+// the full markdown pipeline — react-markdown wraps everything in <p> tags and
+// fights the title's own font styling, which is overkill for what's usually a
+// single short phrase with an identifier or regex fragment in it.
+function InlineCode({ text }: { text: string }) {
+  const parts = text.split(/(`[^`]+`)/g);
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.startsWith("`") && part.endsWith("`") ? (
+          <code
+            key={i}
+            className="rounded px-1.5 py-0.5 font-mono text-[0.85em] break-all"
+            style={{ background: "rgba(255, 255, 255, 0.08)", color: "var(--text-primary)" }}
+          >
+            {part.slice(1, -1)}
+          </code>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
 }
