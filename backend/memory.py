@@ -9,13 +9,13 @@ from cognee.low_level import setup as cognee_setup
 from cognee.modules.retrieval.graph_completion_retriever import GraphCompletionRetriever
 from cognee.tasks.storage.add_data_points import add_data_points
 
-from backend.config import GEMINI_API_KEY, GITHUB_TOKEN
+from backend.config import GEMINI_API_KEY, GEMINI_EMBEDDING_API_KEY, GITHUB_TOKEN
 from backend.extraction import (
     ExtractionResult,
     extract_from_commits,
     extract_from_prs,
 )
-from backend.extraction import _model as _gemini_model
+from backend.extraction import get_primary_model
 from backend.ingestion import GitHubIngestor
 from backend.schemas import (
     ChatSession,
@@ -37,7 +37,10 @@ cognee.config.set_llm_model("gemini/gemini-2.5-flash")
 cognee.config.set_llm_api_key(GEMINI_API_KEY)
 cognee.config.set_embedding_provider("gemini")
 cognee.config.set_embedding_model("gemini/gemini-embedding-001")
-cognee.config.set_embedding_api_key(GEMINI_API_KEY)
+# Deliberately a separate key from set_llm_api_key above — embeddings run on every
+# search (ask, forget/preview) as well as every ingest, and sharing one key's 5 req/min
+# free-tier budget with extraction/completion calls was confirmed to starve both sides.
+cognee.config.set_embedding_api_key(GEMINI_EMBEDDING_API_KEY)
 
 # Forget engine relevance threshold.
 # Cognee returns cosine distance (0 = identical, 2 = opposite).
@@ -650,7 +653,8 @@ async def _generate_answer_summary(query: str, sources: list[dict]) -> str:
     )
 
     try:
-        response = await _gemini_model.generate_content_async(
+        model = await get_primary_model()
+        response = await model.generate_content_async(
             prompt,
             request_options={"timeout": 8},
         )

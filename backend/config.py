@@ -64,3 +64,19 @@ def parse_github_repo(repo_input: str) -> str:
 GEMINI_API_KEY = _require_env("GEMINI_API_KEY")
 GITHUB_TOKEN = _require_env("GITHUB_TOKEN")
 TEST_REPO = os.getenv("TEST_REPO") or "vercel/ms"
+
+# Optional second key so embedding calls (used during ingestion AND every search —
+# ask, forget/preview) draw from a separate free-tier quota pool than generation calls
+# (extraction, answer synthesis). Without this, both workloads share one 5-req/min
+# budget and starve each other under load. Falls back to the primary key if unset, so
+# existing single-key setups keep working unchanged.
+GEMINI_EMBEDDING_API_KEY = os.getenv("GEMINI_EMBEDDING_API_KEY") or GEMINI_API_KEY
+
+# Optional pool of keys for commit/PR extraction specifically, comma-separated. Each
+# key has its own independent free-tier quota (5 req/min AND 20 req/day, confirmed via
+# live 429s on both limits) — N keys means N times the extraction throughput, not just
+# N times the burst tolerance. Falls back to a single-key list [GEMINI_API_KEY] if unset.
+_extraction_keys_raw = os.getenv("GEMINI_EXTRACTION_API_KEYS", "")
+GEMINI_EXTRACTION_API_KEYS = [k.strip() for k in _extraction_keys_raw.split(",") if k.strip()] or [
+    GEMINI_API_KEY
+]
